@@ -57,7 +57,7 @@ CUTLASS_HOST_DEVICE
 bool relatively_equal_float(T a, T b, T epsilon, T nonzero_floor) {
 
 #if defined (CUTLASS_ENABLE_SYCL)
-  using cutlass::abs;
+  auto abs = [] (T value)-> T { return static_cast<T>(sycl::fabs(static_cast<float>(value))); };
 #elif defined(__CUDACC_RTC__)
   using cuda::std::abs;
 #else
@@ -67,7 +67,7 @@ bool relatively_equal_float(T a, T b, T epsilon, T nonzero_floor) {
   T abs_A = abs(a);
   T abs_B = abs(b);
   T diff = abs(a - b);
-  T zero = T(0);
+  T zero = T(0.0f);
 
   if (a == b) {
     return true;

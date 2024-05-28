@@ -27,6 +27,27 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-if(SYCL_INTEL_TARGET)
-  add_subdirectory(pvc)
-endif()
+cutlass_benchmark_add_executable(
+  bench_ampere_gemm_fp16_fp16_fp32_tensor_op_fp32
+  bench_ampere_gemm_fp16_fp16_fp32_tensor_op_fp32.cu
+)
+
+cutlass_benchmark_add_executable(
+  bench_ampere_gemm_fp16_fp16_fp16_tensor_op_fp32
+  bench_ampere_gemm_fp16_fp16_fp16_tensor_op_fp32.cu
+)
+
+cutlass_benchmark_add_executable(
+  bench_ampere_gemm_bf16_bf16_fp32_tensor_op_fp32
+  bench_ampere_gemm_bf16_bf16_fp32_tensor_op_fp32.cu
+)
+
+cutlass_benchmark_add_executable(
+  bench_ampere_gemm_tf32_tf32_fp32_tensor_op_fp32
+  bench_ampere_gemm_tf32_tf32_fp32_tensor_op_fp32.cu
+)
+
+cutlass_benchmark_add_executable(
+  bench_ampere_gemm_bf16_bf16_bf16_tensor_op_fp32
+  bench_ampere_gemm_bf16_bf16_bf16_tensor_op_fp32.cu
+)
