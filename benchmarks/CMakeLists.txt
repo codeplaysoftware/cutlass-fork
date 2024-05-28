@@ -26,7 +26,48 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+set(CUTLASS_BENCHMARKS_COMMON_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/common)
+
+add_custom_target(cutlass_benchmarks)
+
+function(cutlass_benchmark_add_executable NAME)
+
+  set(options)
+  set(oneValueArgs DISABLE_TESTS)
+  set(multiValueArgs DEPENDS DEPENDEES TEST_COMMAND_OPTIONS)
+  cmake_parse_arguments(_ "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  set(__DISABLE_TESTS ON)
+
+  cutlass_add_executable(${NAME} ${__UNPARSED_ARGUMENTS} BATCH_SOURCES OFF)
+
+  add_dependencies(cutlass_benchmarks ${NAME})
+
+  if (NOT CUTLASS_ENABLE_SYCL)
+    SET(ADD_CUDA ON)
+  endif()
+
+  target_link_libraries(
+    ${NAME}
+    PRIVATE
+    CUTLASS
+    cutlass_tools_util_includes
+    $<$<BOOL:${CUTLASS_ENABLE_CUBLAS}>:nvidia::cublas>
+    $<$<BOOL:${ADD_CUDA}>:cuda>
+  )
+
+  if (CUTLASS_ENABLE_SYCL)
+    add_sycl_to_target(TARGET ${NAME})
+  endif()
+
+  install(
+    TARGETS ${NAME}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  )
+endfunction()
 
 if(SYCL_INTEL_TARGET)
   add_subdirectory(pvc)
+else(SYCL_NVIDIA_TARGET OR NOT CUTLASS_ENABLE_SYCL)
+  add_subdirectory(ampere)
 endif()

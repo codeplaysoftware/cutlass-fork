@@ -27,6 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
-if(SYCL_INTEL_TARGET)
-  add_subdirectory(pvc)
-endif()
+cutlass_benchmark_add_executable(
+  bench_pvc_gemm_bf16_bf16_fp32_dpas_fp32
+  bench_pvc_gemm_bf16_bf16_fp32_dpas_fp32.cpp
+)
