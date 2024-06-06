@@ -46,6 +46,9 @@
 #include "cutlass/util/packed_stride.hpp"
 #include "cutlass/util/reference/device/gemm_complex.h"
 #include "cutlass/util/reference/device/tensor_compare.h"
+#include "cutlass/util/reference/device/tensor_relu.h"
+#include "cutlass/tensor_view.h"
+#include "cutlass/coord.h"
 
 template <typename T>
 static void fill_matrix(std::vector<T> &vector)
@@ -203,6 +206,11 @@ struct ExampleRunner {
           M * N, // batch_stride_C
           M * N  // batch_stride_D
         );
+
+    syclcompat::wait();
+
+    using TensorView = cutlass::TensorView<ElementOutput, LayoutD>;
+    cutlass::reference::device::TensorReLu(TensorView(block_ref_D.get(), LayoutD::packed({M, N}), cutlass::make_Coord(M, N)));
 
     syclcompat::wait();
 
@@ -365,8 +373,7 @@ int main(int argc, const char** argv)
   using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelPVCUnpredicated;
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelPVCEpilogue;
 
-  using EpilogueOp = cutlass::epilogue::fusion::LinearCombination<ElementOutput, ElementComputeEpilogue,
-          ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
+  using EpilogueOp = cutlass::epilogue::fusion::LinCombEltAct<cutlass::epilogue::thread::ReLu, ElementOutput, ElementComputeEpilogue, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
 
   using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
           decltype(tile_shape(TiledMma()))>;
