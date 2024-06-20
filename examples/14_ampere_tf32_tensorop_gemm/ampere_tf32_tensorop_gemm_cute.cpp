@@ -42,6 +42,10 @@
 #include "cutlass/util/device_memory.h"
 #include "helper.h"
 
+#if defined(CUTLASS_ENABLE_MKL)
+#  include  <oneapi/mkl.hpp>
+#endif
+
 using namespace cute;
 
 using TileShape = Shape<_128, _128, _32>;
@@ -231,6 +235,24 @@ void test_gemm(int m, int n, int k)
 
   auto cute_result = std::vector<TC>(h_C.size());
   syclcompat::memcpy<TC>(cute_result.data(), d_C, h_C.size());
+
+#if defined(CUTLASS_ENABLE_MKL)
+  auto d_CRef = syclcompat::malloc<TC>(h_C.size());
+  auto d_hRef = std::vector<TC>(h_C.size());
+  auto queue = syclcompat::get_default_queue();
+  oneapi::mkl::blas::column_major::gemm(queue, oneapi::mkl::transpose::N, oneapi::mkl::transpose::T,
+                                        m, n, k, alpha, d_A, m, d_B, n, beta, d_CRef, m)
+      .wait_and_throw();
+
+  syclcompat::memcpy<TC>(d_hRef.data(), d_CRef, h_C.size());
+  for (int i = 0; i < h_C.size(); i++) {
+    if (std::abs(d_hRef[i] - cute_result[i]) > 0.05) {
+      std::cout << "Error at element = " << i << " Expected: " << d_hRef[i] << " Actual "
+                << cute_result[i] << std::endl;
+      throw std::runtime_error("Verification Failed");
+    }
+  }
+#endif
 
   // Timing iterations
   timer.start();

@@ -753,6 +753,14 @@ install(DIRECTORY DESTINATION ${CUTLASS_TEST_INSTALL_PREFIX}/ctest)
 set(CUTLASS_ENABLE_CUBLAS OFF CACHE BOOL "cuBLAS usage for tests")
 set(CUTLASS_ENABLE_CUDNN OFF CACHE BOOL "cuDNN usage for tests")
 
+if (CUTLASS_ENABLE_SYCL)
+  set(CUTLASS_ENABLE_MKL OFF CACHE BOOL "oneMKL usage for tests")
+  if (CUTLASS_ENABLE_MKL)
+    include(onemkl)
+    target_compile_definitions(CUTLASS INTERFACE CUTLASS_ENABLE_MKL=1)
+ endif()
+endif()
+
 include(${CMAKE_CURRENT_SOURCE_DIR}/cuBLAS.cmake)
 
 if (CUTLASS_ENABLE_CUBLAS)
