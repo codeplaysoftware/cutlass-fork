@@ -526,7 +526,7 @@ struct Sm90TreeVisitor<
           if (lane_idx == i) {
             copy_if(FunctionPredTensor(predicate_fn), tC_rAux, tC_gAux);
           }
-          __syncwarp();
+          syncwarp();
         }
       }
     }
