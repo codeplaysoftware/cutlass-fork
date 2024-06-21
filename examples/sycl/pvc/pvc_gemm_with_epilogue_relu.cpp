@@ -29,7 +29,6 @@
  *
  **************************************************************************************************/
 
-#include "cutlass/gemm/device/gemm.h"
 #include "cutlass/epilogue/collective/default_epilogue.hpp"
 #include "cutlass/epilogue/collective/intel_pvc_epilogue.hpp"
 #include "cutlass/epilogue/fusion/intel_pvc_callbacks.hpp"
@@ -210,7 +209,8 @@ struct ExampleRunner {
     syclcompat::wait();
 
     using TensorView = cutlass::TensorView<ElementOutput, LayoutD>;
-    cutlass::reference::device::TensorReLu(TensorView(block_ref_D.get(), LayoutD::packed({M, N}), cutlass::make_Coord(M, N)));
+    cutlass::reference::device::TensorReLu(TensorView(block_ref_D.get(), LayoutD::packed({M, N}),
+                                                      cutlass::make_Coord(M, N)));
 
     syclcompat::wait();
 

@@ -40,12 +40,12 @@
 #include "cute/tensor.hpp"
 
 #include "cutlass/epilogue/dispatch_policy.hpp"
-// #include "cutlass/epilogue/fusion/callbacks.hpp"
-// #include "cutlass/epilogue/fusion/sm90_callbacks_tma_warpspecialized.hpp"
-// #include "cutlass/epilogue/fusion/sm90_visitor_tma_warpspecialized.hpp"
-// #include "cutlass/epilogue/fusion/sm90_visitor_load_tma_warpspecialized.hpp"
-// #include "cutlass/epilogue/fusion/sm90_visitor_store_tma_warpspecialized.hpp"
-// #include "cutlass/epilogue/fusion/sm90_visitor_compute_tma_warpspecialized.hpp"
+#include "cutlass/epilogue/fusion/callbacks.hpp"
+#include "cutlass/epilogue/fusion/sm90_callbacks_tma_warpspecialized.hpp"
+#include "cutlass/epilogue/fusion/sm90_visitor_tma_warpspecialized.hpp"
+#include "cutlass/epilogue/fusion/sm90_visitor_load_tma_warpspecialized.hpp"
+#include "cutlass/epilogue/fusion/sm90_visitor_store_tma_warpspecialized.hpp"
+#include "cutlass/epilogue/fusion/sm90_visitor_compute_tma_warpspecialized.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -53,27 +53,23 @@ namespace cutlass::epilogue::fusion {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-// template <class NodeOp, class... ChildOps>
-// using Sm90EVT = Sm90TreeVisitor<NodeOp, ChildOps...>;
-
 template <
-  class ElementOutput_,
-  class ElementCompute_,
-  class ElementSource_,
-  class ElementScalar_,
-  FloatRoundStyle RoundStyle_,
-  class CtaTileShapeMNK_,
-  class EpilogueTile_
+        class ElementOutput_,
+        class ElementCompute_,
+        class ElementSource_,
+        class ElementScalar_,
+        FloatRoundStyle RoundStyle_,
+        class CtaTileShapeMNK_,
+        class EpilogueTile_
 >
 struct FusionCallbacks<
-    epilogue::IntelPVCEpilogue,
-    fusion::LinearCombination<ElementOutput_, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle_>,
-    CtaTileShapeMNK_,
-    EpilogueTile_,
-    void, void
-> {//: Sm90LinearCombination<typename cutlass::detail::get_unpacked_element_type<ElementOutput>::type, ElementCompute, ElementSource, ElementScalar, RoundStyle_> {
+        epilogue::IntelPVCEpilogue,
+        fusion::LinearCombination<ElementOutput_, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle_>,
+        CtaTileShapeMNK_,
+        EpilogueTile_
+> : Sm90LinearCombination<typename cutlass::detail::get_unpacked_element_type<ElementOutput_>::type, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle_> {
 
-  // using Impl = Sm90LinearCombination<typename cutlass::detail::get_unpacked_element_type<ElementOutput>::type, ElementCompute, ElementSource, ElementScalar, RoundStyle_>;
+  using Impl = Sm90LinearCombination<typename cutlass::detail::get_unpacked_element_type<ElementOutput_>::type, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle_>;
   using ElementOutput = ElementOutput_;
   using ElementCompute = ElementCompute_;
   using ElementSource = ElementSource_;
@@ -86,41 +82,41 @@ struct FusionCallbacks<
     ElementScalar const* alpha_ptr = nullptr;
     ElementScalar const* beta_ptr = nullptr;
 
-    // operator typename Impl::Arguments() const {
-    //   return
-    //     {    // ternary op : beta * C + (alpha * acc)
-    //       {{beta}, {beta_ptr}}, // leaf args : beta
-    //       {},                   // leaf args : C
-    //       {                     // binary op : alpha * acc
-    //         {{alpha}, {alpha_ptr}}, // leaf args : alpha
-    //         {},                     // leaf args : acc
-    //         {}                  // binary args : multiplies
-    //       },                    // end binary op
-    //       {} // ternary args : multiply_add
-    //     };   // end ternary op
-    // }
+    operator typename Impl::Arguments() const {
+      return
+              {    // ternary op : beta * C + (alpha * acc)
+                      {{beta}, {beta_ptr}}, // leaf args : beta
+                      {},                   // leaf args : C
+                      {                     // binary op : alpha * acc
+                       {{alpha}, {alpha_ptr}}, // leaf args : alpha
+                               {},                     // leaf args : acc
+                              {}                  // binary args : multiplies
+                      },                    // end binary op
+                      {} // ternary args : multiply_add
+              };   // end ternary op
+    }
   };
 
   // Ctor inheritance
-//   using Impl::Impl;
+  using Impl::Impl;
 };
 
 
 template <
-  template <class> class ActivationFn_,
-  class ElementOutput_,
-  class ElementCompute_,
-  class ElementSource_,
-  class ElementScalar_,
-  FloatRoundStyle RoundStyle_,
-  class CtaTileShapeMNK_,
-  class EpilogueTile_
+        template <class> class ActivationFn_,
+        class ElementOutput_,
+        class ElementCompute_,
+        class ElementSource_,
+        class ElementScalar_,
+        FloatRoundStyle RoundStyle_,
+        class CtaTileShapeMNK_,
+        class EpilogueTile_
 >
 struct FusionCallbacks<
-    epilogue::IntelPVCEpilogue,
-    fusion::LinCombEltAct<ActivationFn_, ElementOutput_, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle_>,
-    CtaTileShapeMNK_,
-    EpilogueTile_
+        epilogue::IntelPVCEpilogue,
+        fusion::LinCombEltAct<ActivationFn_, ElementOutput_, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle_>,
+        CtaTileShapeMNK_,
+        EpilogueTile_
 > : Sm90LinCombEltAct<ActivationFn_, ElementOutput_, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle_> {
 
   using Impl = Sm90LinCombEltAct<ActivationFn_, typename cutlass::detail::get_unpacked_element_type<ElementOutput_>::type, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle_>;
@@ -141,19 +137,19 @@ struct FusionCallbacks<
 
     operator typename Impl::Arguments() const {
       return
-        {    // unary op: activation(beta * C + (alpha * acc))
-          {    // ternary op : beta * C + (alpha * acc)
-            {{beta}, {beta_ptr}}, // leaf args : beta
-            {},                   // leaf args : C
-            {                     // binary op : alpha * acc
-              {{alpha}, {alpha_ptr}}, // leaf args : alpha
-              {},                     // leaf args : acc
-              {}                  // binary args : multiplies
-            },                    // end binary op
-            {} // ternary args : multiply_add
-          },   // end ternary op
-          activation // unary args: activation
-        };   // end unary op
+              {    // unary op: activation(beta * C + (alpha * acc))
+                      {    // ternary op : beta * C + (alpha * acc)
+                              {{beta}, {beta_ptr}}, // leaf args : beta
+                              {},                   // leaf args : C
+                              {                     // binary op : alpha * acc
+                                      {{alpha}, {alpha_ptr}}, // leaf args : alpha
+                                      {},                     // leaf args : acc
+                                      {}                  // binary args : multiplies
+                              },                    // end binary op
+                              {} // ternary args : multiply_add
+                      },   // end ternary op
+                      activation // unary args: activation
+              };   // end unary op
     }
   };
 
