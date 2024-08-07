@@ -50,14 +50,12 @@
 #include "cutlass/util/packed_stride.hpp"
 #include "cutlass/util/reference/device/gemm_complex.h"
 #include "cutlass/util/reference/device/tensor_compare.h"
+#if defined(CUTLASS_ENABLE_SYCL)
+#include "cutlass/util/reference/device/sycl_tensor_fill.h"
+#else
+#include "cutlass/util/reference/device/tensor_fill.h"
+#endif
 #include "cutlass/util/print_error.hpp"
-
-template <typename T>
-static void fill_matrix(std::vector<T> &M)
-{
-  std::generate(std::begin(M), std::end(M), [&]
-  { return static_cast<T>( 2 * (rand() / double(RAND_MAX)) - 1); });
-}
 
 using namespace cute;
 
@@ -66,313 +64,247 @@ using namespace cute;
 // Command line options parsing
 struct Options {
 
-    bool help;
-    bool error;
+  bool help;
+  bool error;
 
-    int m, n, k, l, iterations;
-    float alpha, beta;
+  int m, n, k, l, iterations;
+  float alpha, beta;
 
-    Options():
-            help(false),
-            error(false),
-            m(4096), n(4096), k(4096), l(1), iterations(100),
-            alpha(1.f), beta(0.f)
-    { }
+  Options():
+          help(false),
+          error(false),
+          m(5120), n(4096), k(4096), l(1), iterations(100),
+          alpha(1.f), beta(0.f)
+  { }
 
-    // Parses the command line
-    void parse(int argc, char const **args) {
-      cutlass::CommandLine cmd(argc, args);
+  // Parses the command line
+  void parse(int argc, char const **args) {
+    cutlass::CommandLine cmd(argc, args);
 
-      if (cmd.check_cmd_line_flag("help")) {
-        help = true;
-        return;
-      }
-
-      cmd.get_cmd_line_argument("m", m, 4096);
-      cmd.get_cmd_line_argument("n", n, 4096);
-      cmd.get_cmd_line_argument("k", k, 4096);
-      cmd.get_cmd_line_argument("l", l, 1);
-      cmd.get_cmd_line_argument("alpha", alpha, 1.f);
-      cmd.get_cmd_line_argument("beta", beta, 0.f);
-      cmd.get_cmd_line_argument("iterations", iterations, 100);
+    if (cmd.check_cmd_line_flag("help")) {
+      help = true;
+      return;
     }
 
-    /// Prints the usage statement.
-    std::ostream & print_usage(std::ostream &out) const {
+    cmd.get_cmd_line_argument("m", m, 5120);
+    cmd.get_cmd_line_argument("n", n, 4096);
+    cmd.get_cmd_line_argument("k", k, 4096);
+    cmd.get_cmd_line_argument("l", l, 1);
+    cmd.get_cmd_line_argument("alpha", alpha, 1.f);
+    cmd.get_cmd_line_argument("beta", beta, 0.f);
+    cmd.get_cmd_line_argument("iterations", iterations, 100);
+  }
 
-      out << "PVC GEMM Benchmark\n\n"
-          << "Options:\n\n"
-          << "  --help                      If specified, displays this usage statement\n\n"
-          << "  --m=<int>                   Sets the M extent of the GEMM\n"
-          << "  --n=<int>                   Sets the N extent of the GEMM\n"
-          << "  --k=<int>                   Sets the K extent of the GEMM\n"
-          << "  --l=<int>                   Sets the L extent (batch count) of the GEMM\n"
-          << "  --alpha=<s32>               Epilogue scalar alpha\n"
-          << "  --beta=<s32>                Epilogue scalar beta\n\n"
-          << "  --iterations=<int>          Iterations\n\n";
+  /// Prints the usage statement.
+  std::ostream & print_usage(std::ostream &out) const {
 
-      return out;
-    }
+    out << "PVC GEMM Benchmark\n\n"
+        << "Options:\n\n"
+        << "  --help                      If specified, displays this usage statement\n\n"
+        << "  --m=<int>                   Sets the M extent of the GEMM\n"
+        << "  --n=<int>                   Sets the N extent of the GEMM\n"
+        << "  --k=<int>                   Sets the K extent of the GEMM\n"
+        << "  --l=<int>                   Sets the L extent (batch count) of the GEMM\n"
+        << "  --alpha=<s32>               Epilogue scalar alpha\n"
+        << "  --beta=<s32>                Epilogue scalar beta\n\n"
+        << "  --iterations=<int>          Iterations\n\n";
+
+    return out;
+  }
 };
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// Helper to initialize a block of device data
+template <class Element>
+bool initialize_block(
+    cutlass::DeviceAllocation<Element>& block,
+    uint64_t seed=2023) {
+
+  Element scope_max, scope_min;
+  int bits_input = cutlass::sizeof_bits<Element>::value;
+
+  if (bits_input == 1) {
+    scope_max = Element(2);
+    scope_min = Element(0);
+  } else if (bits_input <= 8) {
+    scope_max = Element(2);
+    scope_min = Element(-2);
+  } else {
+    scope_max = Element(8);
+    scope_min = Element(-8);
+  }
+
+  cutlass::reference::device::BlockFillRandomUniform(
+        block.get(), block.size(), seed, scope_max, scope_min, 0);
+  return true;
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <class Gemm>
 struct BenchmarkRunner {
 
-    using StrideA = typename Gemm::GemmKernel::StrideA;
-    using StrideB = typename Gemm::GemmKernel::StrideB;
-    using StrideC = typename Gemm::GemmKernel::StrideC;
-    using StrideD = typename Gemm::GemmKernel::StrideD;
+  using StrideA = typename Gemm::GemmKernel::StrideA;
+  using StrideB = typename Gemm::GemmKernel::StrideB;
+  using StrideC = typename Gemm::GemmKernel::StrideC;
+  using StrideD = typename Gemm::GemmKernel::StrideD;
 
-    using LayoutA = typename Gemm::LayoutA;
-    using LayoutB = typename Gemm::LayoutB;
-    using LayoutC = typename Gemm::LayoutC;
-    using LayoutD = typename Gemm::LayoutD;
+  using LayoutA = typename Gemm::LayoutA;
+  using LayoutB = typename Gemm::LayoutB;
+  using LayoutC = typename Gemm::LayoutC;
+  using LayoutD = typename Gemm::LayoutD;
 
-    using ElementA = typename Gemm::ElementA;
-    using ElementB = typename Gemm::ElementB;
-    using ElementAcc = typename Gemm::ElementAccumulator;
+  using ElementA = typename Gemm::ElementA;
+  using ElementB = typename Gemm::ElementB;
+  using ElementAcc = typename Gemm::ElementAccumulator;
 
-    using CollectiveEpilogue = typename Gemm::CollectiveEpilogue;
-    using ElementC = typename Gemm::ElementC;
-    using ElementOutput = typename CollectiveEpilogue::ElementOutput;
-    using ElementCompute = typename CollectiveEpilogue::ElementCompute;
-    using ElementAccumulator = typename CollectiveEpilogue::ElementAccumulator;
+  using CollectiveEpilogue = typename Gemm::CollectiveEpilogue;
+  using ElementC = typename Gemm::ElementC;
+  using ElementOutput = typename CollectiveEpilogue::ElementOutput;
+  using ElementCompute = typename CollectiveEpilogue::ElementCompute;
+  using ElementAccumulator = typename CollectiveEpilogue::ElementAccumulator;
 
-    using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
+  using ProblemShapeType = typename Gemm::GemmKernel::ProblemShape;
 
-    //
-    // Data members
-    //
+  //
+  // Data members
+  //
 
-    /// Initialization
-    StrideA stride_A;
-    StrideB stride_B;
-    StrideC stride_C;
-    StrideD stride_D;
+  /// Initialization
+  StrideA stride_A;
+  StrideB stride_B;
+  StrideC stride_C;
+  StrideD stride_D;
+  uint64_t seed = 0;
 
-    cutlass::DeviceAllocation<ElementA> block_A;
-    cutlass::DeviceAllocation<ElementB> block_B;
-    cutlass::DeviceAllocation<ElementC> block_C;
-    cutlass::DeviceAllocation<ElementOutput> block_D;
-    cutlass::DeviceAllocation<ElementOutput> block_ref_D;
+  cutlass::DeviceAllocation<ElementA> block_A;
+  cutlass::DeviceAllocation<ElementB> block_B;
+  cutlass::DeviceAllocation<ElementC> block_C;
+  cutlass::DeviceAllocation<ElementOutput> block_D;
+  cutlass::DeviceAllocation<ElementOutput> block_ref_D;
 
-    ElementOutput epsilon;
-    ElementOutput nonzero_floor;
+  //
+  // Methods
+  //
 
-    BenchmarkRunner() : epsilon(static_cast<ElementOutput>(0.1f)),
-                      nonzero_floor(static_cast<ElementOutput>(0.1f)) {};
+  bool verify(const ProblemShapeType& problem_size, ElementCompute alpha, ElementCompute beta) {
+    auto [M, N, K, L] = problem_size;
 
-    BenchmarkRunner(ElementOutput epsilon, ElementOutput nonzeroFloor) :
-            epsilon(epsilon), nonzero_floor(nonzeroFloor) {}
+    cutlass::TensorRef ref_A(block_A.get(), LayoutA::packed({M, K}));
+    cutlass::TensorRef ref_B(block_B.get(), LayoutB::packed({K, N}));
+    cutlass::TensorRef ref_C(block_C.get(), LayoutC::packed({M, N}));
+    cutlass::TensorRef ref_D(block_ref_D.get(), LayoutD::packed({M, N}));
 
-    //
-    // Methods
-    //
-
-    bool verify(const ProblemShapeType& problem_size, ElementCompute alpha, ElementCompute beta) {
-      auto [M, N, K, L] = problem_size;
-
-      cutlass::TensorRef ref_A(block_A.get(), LayoutA::packed({M, K}));
-      cutlass::TensorRef ref_B(block_B.get(), LayoutB::packed({K, N}));
-      cutlass::TensorRef ref_C(block_C.get(), LayoutC::packed({M, N}));
-      cutlass::TensorRef ref_D(block_ref_D.get(), LayoutD::packed({M, N}));
-
-      cutlass::reference::device::GemmComplex(
-              {M, N, K},
-              alpha,
-              ref_A,
-              cutlass::ComplexTransform::kNone,
-              ref_B,
-              cutlass::ComplexTransform::kNone,
-              beta,
-              ref_C,
-              ref_D,
-              ElementAccumulator(0),
-              L,     // batch_count
-              M * K, // batch_stride_A
-              K * N, // batch_stride_B
-              M * N, // batch_stride_C
-              M * N  // batch_stride_D
-      );
+    cutlass::reference::device::GemmComplex(
+            {M, N, K},
+            alpha,
+            ref_A,
+            cutlass::ComplexTransform::kNone,
+            ref_B,
+            cutlass::ComplexTransform::kNone,
+            beta,
+            ref_C,
+            ref_D,
+            ElementAccumulator(0),
+            L,     // batch_count
+            M * K, // batch_stride_A
+            K * N, // batch_stride_B
+            M * N, // batch_stride_C
+            M * N  // batch_stride_D
+    );
 
 #if defined(CUTLASS_ENABLE_SYCL)
-      syclcompat::wait();
+    syclcompat::wait();
 #else
-      cudaDeviceSynchronize();
+    cudaDeviceSynchronize();
 #endif
 
-      // Check if output from CUTLASS kernel and reference kernel are relatively equal or not
-      // need to set a larger error margin for comparison to succeed
-      auto epsilon = static_cast<ElementOutput>(0.1f);
-      auto nonzero_floor = static_cast<ElementOutput>(0.1f);
+    // Check if output from CUTLASS kernel and reference kernel are equal or not
+    bool passed = cutlass::reference::device::BlockCompareEqual(
+      block_ref_D.get(), block_D.get(), block_D.size());
 
-      bool passed = cutlass::reference::device::BlockCompareRelativelyEqual(
-              block_ref_D.get(), block_D.get(), block_D.size(),
-              epsilon, nonzero_floor);
+    return passed;
+  }
 
-      return passed;
-    }
-
-    /// Initialize operands to be used in the GEMM and reference GEMM
-    virtual void initialize(const ProblemShapeType& problem_size) {
-      auto problem_shape_MNKL = cute::append<4>(problem_size, 1);
-      auto [M, N, K, L] = problem_shape_MNKL;
+  /// Initialize operands to be used in the GEMM and reference GEMM
+  virtual void initialize(const ProblemShapeType& problem_size) {
+    auto problem_shape_MNKL = cute::append<4>(problem_size, 1);
+    auto [M, N, K, L] = problem_shape_MNKL;
 
 #if defined(CUTLASS_SYCLCOMPAT_PROFILING_ENABLED)
-      sycl::property_list prop = {
-              sycl::property::queue::in_order(),
-              sycl::property::queue::enable_profiling()
-      };
+    sycl::property_list prop = {
+      sycl::property::queue::in_order(),
+      sycl::property::queue::enable_profiling()
+    };
 
-      auto q = sycl::queue(syclcompat::get_default_context(), syclcompat::get_current_device(), prop);
-      syclcompat::set_default_queue(q);
+    auto q = sycl::queue(syclcompat::get_default_context(), syclcompat::get_current_device(), prop);
+    syclcompat::set_default_queue(q);
 #endif
 
-      stride_A = cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, L));
-      stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, L));
-      stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(M, N, L));
-      stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(M, N, L));
+    stride_A = cutlass::make_cute_packed_stride(StrideA{}, cute::make_shape(M, K, L));
+    stride_B = cutlass::make_cute_packed_stride(StrideB{}, cute::make_shape(N, K, L));
+    stride_C = cutlass::make_cute_packed_stride(StrideC{}, cute::make_shape(M, N, L));
+    stride_D = cutlass::make_cute_packed_stride(StrideD{}, cute::make_shape(M, N, L));
 
-      block_A.reset(M * K * L);
-      block_B.reset(K * N * L);
-      block_C.reset(M * N * L);
-      block_D.reset(M * N * L);
-      block_ref_D.reset(M * N * L);
+    block_A.reset(M * K * L);
+    block_B.reset(K * N * L);
+    block_C.reset(M * N * L);
+    block_D.reset(M * N * L);
+    block_ref_D.reset(M * N * L);
 
-      // TODO: Enable initialization on device directly once RNG is
-      // available through SYCL.
-      std::vector<ElementA> a(K * M * L);
-      std::vector<ElementB> b(K * N * L);
-      std::vector<ElementC> c(M * N * L);
-      std::vector<ElementC> d(M * N * L, ElementC{-1});
-      std::vector<ElementC> ref_d(M * N * L, ElementC{-2});
+    initialize_block(block_A, seed + 2023);
+    initialize_block(block_B, seed + 2022);
+    initialize_block(block_C, seed + 2021);
+  }
 
-      fill_matrix(a);
-      fill_matrix(b);
-      fill_matrix(c);
+  virtual void run(const Options& options, const cutlass::KernelHardwareInfo& hw_info) {
+    ProblemShapeType problem_size = ProblemShapeType{options.m, options.n, options.k, options.l};
 
-      block_A.copy_from_host(a.data(), a.size());
-      block_B.copy_from_host(b.data(), b.size());
-      block_C.copy_from_host(c.data(), c.size());
-      block_D.copy_from_host(d.data(), d.size());
-      block_ref_D.copy_from_host(ref_d.data(), d.size());
-    }
+    initialize(problem_size);
 
-    virtual void run(const Options& options, const cutlass::KernelHardwareInfo& hw_info) {
-      ProblemShapeType problem_size = ProblemShapeType{options.m, options.n, options.k, options.l};
-
-      initialize(problem_size);
-
-      typename Gemm::GemmKernel::Arguments arguments{
-              cutlass::gemm::GemmUniversalMode::kGemm,
-              problem_size,
-              {block_A.get(), stride_A, block_B.get(), stride_B},
-              {{options.alpha, options.beta}, block_C.get(), stride_C, block_D.get(), stride_D},
-              hw_info
-      };
-
-      Gemm gemm_op;
-
-      size_t workspace_size = Gemm::get_workspace_size(arguments);
-      cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
-
-      gemm_op.can_implement(arguments);
-
-      gemm_op.initialize(arguments, workspace.get());
-
-      // Run the GEMM
-      gemm_op.run();
-
-#if defined(CUTLASS_ENABLE_SYCL)
-      syclcompat::wait();
-#else
-      cudaDeviceSynchronize();
-#endif
-
-      // Verify that the result is correct
-      bool passed = verify(problem_size, options.alpha, options.beta);
-      std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
-
-      if (passed && options.iterations > 0) {
-        GPU_Clock timer;
-        timer.start();
-        for (int i = 0; i < options.iterations; ++i) {
-          gemm_op.run();
-        }
-
-        float cute_time = timer.seconds() / options.iterations;
-        double tflops = (2.0 * options.m * options.n * options.k * options.l) * 1e-12;
-        std::cout << "Problem Size: " << options.m << 'x' << options.n << 'x' << options.k << 'x' << options.l
-                  << std::endl;
-        printf("Cutlass GEMM Performance:     [%4.3f]TFlop/s  (%6.4f)ms\n", tflops / cute_time, cute_time * 1000);
-      }
-    }
+    typename Gemm::GemmKernel::Arguments arguments{
+      cutlass::gemm::GemmUniversalMode::kGemm,
+      problem_size,
+      {block_A.get(), stride_A, block_B.get(), stride_B},
+      {{options.alpha, options.beta}, block_C.get(), stride_C, block_D.get(), stride_D},
+      hw_info
 };
 
-template <class Gemm>
-struct PvcBenchmarkRunner : BenchmarkRunner<Gemm> {
-    using Base = BenchmarkRunner<Gemm>;
+    Gemm gemm_op;
 
-    using ElementB = typename Base::ElementB;
+    size_t workspace_size = Gemm::get_workspace_size(arguments);
+    cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
 
-    using ProblemShapeType = typename Base::ProblemShapeType;
+    gemm_op.can_implement(arguments);
 
-    void initialize(const ProblemShapeType& problem_size) override {
-      Base::initialize(problem_size);
-    }
-    
-    void run(const Options& options, const cutlass::KernelHardwareInfo& hw_info) override {
-      ProblemShapeType problem_size = ProblemShapeType{options.m, options.n, options.k, options.l};
+    gemm_op.initialize(arguments, workspace.get());
 
-      initialize(problem_size);
-
-      typename Gemm::GemmKernel::Arguments arguments{
-              cutlass::gemm::GemmUniversalMode::kGemm,
-              problem_size,
-              {Base::block_A.get(), Base::stride_A, Base::block_B.get(), Base::stride_B},
-              {
-                {options.alpha, options.beta},
-                Base::block_C.get(), Base::stride_C, Base::block_D.get(), Base::stride_D
-              },
-              hw_info
-      };
-
-      Gemm gemm_op;
-
-      size_t workspace_size = Gemm::get_workspace_size(arguments);
-      cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
-
-      gemm_op.can_implement(arguments);
-
-      gemm_op.initialize(arguments, workspace.get());
-
-      // Run the GEMM
-      gemm_op.run();
+    // Run the GEMM
+    gemm_op.run();
 
 #if defined(CUTLASS_ENABLE_SYCL)
-      syclcompat::wait();
+    syclcompat::wait();
 #else
-      cudaDeviceSynchronize();
+    cudaDeviceSynchronize();
 #endif
 
-      // Verify that the result is correct
-      bool passed = Base::verify(problem_size, options.alpha, options.beta);
-      std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
+    // Verify that the result is correct
+    bool passed = verify(problem_size, options.alpha, options.beta);
+    std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
 
-      if (passed && options.iterations > 0) {
-        GPU_Clock timer;
-        timer.start();
-        for (int i = 0; i < options.iterations; ++i) {
-          gemm_op.run();
-        }
-
-        float cute_time = timer.seconds() / options.iterations;
-        double tflops = (2.0 * options.m * options.n * options.k * options.l) * 1e-12;
-        std::cout << "Problem Size: " << options.m << 'x' << options.n << 'x' << options.k << 'x' << options.l << std::endl;
-        printf("Cutlass GEMM Performance:     [%4.3f]TFlop/s  (%6.4f)ms\n", tflops / cute_time, cute_time*1000);
+    if (passed && options.iterations > 0) {
+      GPU_Clock timer;
+      timer.start();
+      for (int i = 0; i < options.iterations; ++i) {
+        gemm_op.run();
       }
-    }
-};
 
+      float cute_time = timer.seconds() / options.iterations;
+      double tflops = (2.0 * options.m * options.n * options.k * options.l) * 1e-12;
+      std::cout << "Problem Size: " << options.m << 'x' << options.n << 'x' << options.k << 'x' << options.l
+                << std::endl;
+      printf("Cutlass GEMM Performance:     [%4.3f]TFlop/s  (%6.4f)ms\n", tflops / cute_time, cute_time * 1000);
+    }
+  }
+};
