@@ -53,7 +53,7 @@ struct SharedStorage
 #if CUDA_12_0_SM90_FEATURES_SUPPORTED
 
 template <class T, class TiledCopy, class CTA_Tiler, class GmemLayout, class SmemLayout>
-__global__ void
+CUTLASS_GLOBAL void
 tma_test_device_cute(T const* g_in, T* g_out,
                      CUTE_GRID_CONSTANT TiledCopy const tma, CTA_Tiler cta_tiler,
                      GmemLayout gmem_layout, SmemLayout smem_layout)
@@ -62,7 +62,11 @@ tma_test_device_cute(T const* g_in, T* g_out,
   CUTE_STATIC_ASSERT_V(product_each(shape(cta_tiler)) == product_each(shape(smem_layout)));
 
   // Use Shared Storage structure to allocate and distribute aligned SMEM addresses
+  #if defined(CUTLASS_ENABLE_SYCL)
+  //TODO: access shared memory via the work-group static extension
+  #else
   extern __shared__ char shared_memory[];
+  #endif
   using SharedStorage = SharedStorage<T, SmemLayout>;
   SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(shared_memory);
 
@@ -123,7 +127,7 @@ tma_test_device_cute(T const* g_in, T* g_out,
 #endif
 
   // Test L2 prefetch
-  if (threadIdx.x == 0) {
+  if (ThreadIdxX() == 0) {
     prefetch(tma, tAgA);
   }
 
@@ -133,7 +137,7 @@ tma_test_device_cute(T const* g_in, T* g_out,
     // Set the bytes transferred in this TMA transaction (may involve multiple issues)
     constexpr int kTmaTransactionBytes = sizeof(ArrayEngine<T, size(sA)>);
 
-    if (threadIdx.x == 0)
+    if (ThreadIdxX() == 0)
     {
       /// Initialize shared memory barrier
       tma_load_mbar[0] = 0;
@@ -142,7 +146,7 @@ tma_test_device_cute(T const* g_in, T* g_out,
 
       copy(tma.with(tma_load_mbar[0]), tAgA(_,stage), tAsA(_,0));
     }
-    __syncthreads();
+    syncthreads();
 
     /// Wait on the shared memory barrier until the phase bit flips from kPhaseBit value
     constexpr int kPhaseBit = 0;
@@ -157,7 +161,7 @@ tma_test_device_cute(T const* g_in, T* g_out,
       copy(sA, tBgB(_,stage));
     }
 
-    __syncthreads();
+    syncthreads();
   }
 }
 
@@ -172,15 +176,15 @@ test_tma_load(CopyOp      const& copy_op,
 
   // Allocate and initialize host test data
   size_t N = ceil_div(cosize(gmem_layout) * sizeof_bits<T>::value, 8);
-  thrust::host_vector<uint8_t> h_in(N);
+  host_vector<uint8_t> h_in(N);
   for (size_t i = 0; i < h_in.size(); ++i) {
     h_in[i] = uint8_t(i % 13);
   }
   Tensor hA_in  = make_tensor(recast_ptr<T>(h_in.data()), gmem_layout);
 
   // Allocate and initialize device test data
-  thrust::device_vector<uint8_t> d_in = h_in;
-  thrust::device_vector<uint8_t> d_out(h_in.size(), uint8_t(-1)); // overflow uint
+  device_vector<uint8_t> d_in = h_in;
+  device_vector<uint8_t> d_out(h_in.size(), uint8_t(-1)); // overflow uint
 
   // Create TMA for this device Tensor
   Tensor gA = make_tensor(make_gmem_ptr<T>(raw_pointer_cast(d_in.data())), gmem_layout);
@@ -189,15 +193,18 @@ test_tma_load(CopyOp      const& copy_op,
 
   // Launch
   int smem_size = int(sizeof(SharedStorage<T, decltype(smem_layout)>));
+  #if defined(CUTLASS_ENABLE_SYCL)
+  //TODO: Launch kernel using syclcompat with the Work group static launch property
+  #else
   tma_test_device_cute<<<1, 128, smem_size>>>(
     reinterpret_cast<T const*>(raw_pointer_cast(d_in.data())),
     reinterpret_cast<T*>      (raw_pointer_cast(d_out.data())),
     tma, cta_tile,
     gmem_layout,
     smem_layout);
-
+  #endif
   // Copy results back to host
-  thrust::host_vector<uint8_t> h_out = d_out;
+  host_vector<uint8_t> h_out = d_out;
   Tensor hA_out = make_tensor(recast_ptr<T>(h_out.data()), gmem_layout);
 
   // Validate the results. Print only the first 3 errors.

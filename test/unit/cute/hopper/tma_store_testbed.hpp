@@ -52,7 +52,7 @@ struct SharedStorage
 #if CUDA_12_0_SM90_FEATURES_SUPPORTED
 
 template <class T, class TiledCopy, class CTA_Tiler, class GmemLayout, class SmemLayout>
-__global__ void
+CUTLASS_GLOBAL void
 tma_test_device_cute(T const* g_in, T* g_out,
                      CUTE_GRID_CONSTANT TiledCopy const tma, CTA_Tiler cta_tiler,
                      GmemLayout gmem_layout, SmemLayout smem_layout)
@@ -61,7 +61,11 @@ tma_test_device_cute(T const* g_in, T* g_out,
   CUTE_STATIC_ASSERT_V(product_each(shape(cta_tiler)) == product_each(shape(smem_layout)));
 
   // Use Shared Storage structure to allocate and distribute aligned SMEM addresses
+  #if defined(CUTLASS_ENABLE_SYCL)
+  //TODO: access shared memory via the work-group static extension
+  #else
   extern __shared__ char shared_memory[];
+  #endif
   using SharedStorage = SharedStorage<T, SmemLayout>;
   SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(shared_memory);
 
@@ -118,7 +122,7 @@ tma_test_device_cute(T const* g_in, T* g_out,
 #endif
 
   // Test L2 prefetch
-  cooperative_prefetch<128>(threadIdx.x, gA);
+  cooperative_prefetch<128>(ThreadIdxX(), gA);
 
   // Loop over the TMA stages, using smem as our buffer
   for (int stage = 0; stage < size<1>(tBgB); ++stage)
@@ -131,19 +135,19 @@ tma_test_device_cute(T const* g_in, T* g_out,
       copy(tAgA(_,stage), sB);
     }
 
-    __syncthreads();
+    syncthreads();
     cute::cp_async_wait<0>();
 
     //
     // Perform the TMA_STORE
     //
 
-    if (threadIdx.x == 0) {
+    if (ThreadIdxX() == 0) {
       copy(tma, tBsB(_,0), tBgB(_,stage));
     }
 
     tma_store_wait<0>();
-    __syncthreads();
+    syncthreads();
   }
 }
 
@@ -158,15 +162,15 @@ test_tma_store(CopyOp      const& copy_op,
 
   // Allocate and initialize host test data
   size_t N = ceil_div(cosize(gmem_layout) * sizeof_bits<T>::value, 8);
-  thrust::host_vector<uint8_t> h_in(N);
+  host_vector<uint8_t> h_in(N);
   for (size_t i = 0; i < h_in.size(); ++i) {
     h_in[i] = uint8_t(i % 13);
   }
   Tensor hA_in  = make_tensor(recast_ptr<T>(h_in.data()), gmem_layout);
 
   // Allocate and initialize device test data
-  thrust::device_vector<uint8_t> d_in = h_in;
-  thrust::device_vector<uint8_t> d_out(h_in.size(), uint8_t(-1)); // overflow uint
+  device_vector<uint8_t> d_in = h_in;
+  device_vector<uint8_t> d_out(h_in.size(), uint8_t(-1)); // overflow uint
 
   // Create TMA for this device Tensor
   Tensor gA = make_tensor(make_gmem_ptr<T>(raw_pointer_cast(d_out.data())), gmem_layout);
@@ -175,15 +179,18 @@ test_tma_store(CopyOp      const& copy_op,
 
   // Launch
   int smem_size = int(sizeof(SharedStorage<T, decltype(smem_layout)>));
+  #if defined(CUTLASS_ENABLE_SYCL)
+  //TODO: Launch kernel using syclcompat with the Work group static launch property
+  #else
   tma_test_device_cute<<<1, 128, smem_size>>>(
     reinterpret_cast<T const*>(raw_pointer_cast(d_in.data())),
     reinterpret_cast<T*>      (raw_pointer_cast(d_out.data())),
     tma, cta_tile,
     gmem_layout,
     smem_layout);
-
+  #endif
   // Copy results back to host
-  thrust::host_vector<uint8_t> h_out = d_out;
+  host_vector<uint8_t> h_out = d_out;
   Tensor hA_out = make_tensor(recast_ptr<T>(h_out.data()), gmem_layout);
 
   // Validate the results. Print only the first 3 errors.

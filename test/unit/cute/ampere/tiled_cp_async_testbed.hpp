@@ -52,18 +52,21 @@ struct SharedStorage
 };
 
 template <class T, class TiledCopy, class GmemLayout, class SmemLayout>
-__global__ void
+CUTLASS_GLOBAL void
 test_tiled_cp_async_device_cute(T const* g_in, T* g_out,
                      TiledCopy const tiled_copy,
                      GmemLayout gmem_layout, SmemLayout smem_layout)
 {
   using namespace cute;
-
-  extern __shared__ char shared_memory[];
+  #if defined(CUTLASS_ENABLE_SYCL)
+  //TODO: access shared memory via the work-group static extension
+  #else
+    extern __shared__ char shared_memory[];
+  #endif
   using SharedStorage = SharedStorage<T, SmemLayout>;
   SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(shared_memory);
 
-  auto thr_copy = tiled_copy.get_slice(threadIdx.x);
+  auto thr_copy = tiled_copy.get_slice(threadIdxX());
   Tensor gA = make_tensor(make_gmem_ptr(g_in), gmem_layout);
   Tensor gB = make_tensor(make_gmem_ptr(g_out), gmem_layout);
 
@@ -86,7 +89,7 @@ test_tiled_cp_async_device_cute(T const* g_in, T* g_out,
 
   cp_async_fence();
   cp_async_wait<0>();
-  __syncthreads();
+  syncthreads();
 
   // Store trivially smem -> gmem
 
@@ -107,25 +110,27 @@ test_tiled_cp_async(
 
   // Allocate and initialize host test data
   size_t N = ceil_div(cosize(gmem_layout) * sizeof_bits<T>::value, 8);
-  thrust::host_vector<T> h_in(N);
+  host_vector<T> h_in(N);
   Tensor hA_in  = make_tensor(recast_ptr<T>(h_in.data()), gmem_layout);
   for (int i = 0; i < size(hA_in); ++i) { hA_in(i) = static_cast<T>(i % 13); }
 
   // Allocate and initialize device test data
-  thrust::device_vector<T> d_in = h_in;
-  thrust::device_vector<T> d_out(h_in.size(), T(-1));
+  device_vector<T> d_in = h_in;
+  device_vector<T> d_out(h_in.size(), T(-1));
 
   // Launch
   int smem_size = int(sizeof(SharedStorage<T, decltype(smem_layout)>));
+  #if defined(CUTLASS_ENABLE_SYCL)
+  #else
   test_tiled_cp_async_device_cute<<<1, 128, smem_size>>>(
     reinterpret_cast<T const*>(raw_pointer_cast(d_in.data())),
     reinterpret_cast<T*>      (raw_pointer_cast(d_out.data())),
     tiled_copy,
     gmem_layout,
     smem_layout);
-
+  #endif
   // Copy results back to host
-  thrust::host_vector<T> h_out = d_out;
+  host_vector<T> h_out = d_out;
   Tensor hA_out = make_tensor(recast_ptr<T>(h_out.data()), gmem_layout);
 
   // Validate the results. Print only the first 3 errors.

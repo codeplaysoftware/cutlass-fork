@@ -55,11 +55,15 @@ namespace cooperative_copy_mode {
 
 // gs --> global to/from shared
 template <int MaxVecBits, uint32_t ThreadBlockSize, class T, class GMemLayout, class SMemLayout>
-__device__ void
+CUTLASS_DEVICE void
 cooperative_copy_default_gs(T const* g_in, T* g_out, GMemLayout const& gmem_layout, SMemLayout const& smem_layout)
 {
   using namespace cute;
+  #if defined(CUTLASS_ENABLE_SYCL)
+  //TODO: access shared memory via the work-group static extension
+  #else
   extern __shared__ uint128_t smem_buf[];
+  #endif
   // Cast smem_buf to smem_uint8_ptr and move it by MaxVecBits bits
   // This is to make sure tests pass on pointer aligned to MaxVecBits bits
   uint8_t* smem_uint8_ptr = reinterpret_cast<uint8_t*>(smem_buf) + (MaxVecBits/8);
@@ -73,25 +77,29 @@ cooperative_copy_default_gs(T const* g_in, T* g_out, GMemLayout const& gmem_layo
 
   cp_async_fence();
   cp_async_wait<0>();
-  __syncthreads();
+  syncthreads();
 
   if(thread0()) {
     for(int i = 0; i < size(s_tensor); ++i) {
       s_tensor(i) += T(i);
     }
   }
-  __syncthreads();
+  syncthreads();
 
   cooperative_copy<ThreadBlockSize, MaxVecBits>(threadIdx.x, s_tensor, g_out_tensor);
 }
 
 // ss --> shared to shared
 template <int MaxVecBits, uint32_t ThreadBlockSize, class T, class Layout1, class Layout2>
-__device__ void
+CUTLASS_DEVICE void
 cooperative_copy_default_ss(T const* g_in, T* g_out, Layout1 const& layout1, Layout2 const& layout2)
 {
   using namespace cute;
+  #if defined(CUTLASS_ENABLE_SYCL)
+  //TODO: access shared memory via the work-group static extension
+  #else
   extern __shared__ uint128_t smem_buf[];
+  #endif
   // Cast smem_buf to smem_uint8_ptr and move it by MaxVecBits bits
   // This is to make sure tests pass on pointer aligned to MaxVecBits bits
   T* smem1 = reinterpret_cast<T*>(smem_buf);
@@ -108,24 +116,24 @@ cooperative_copy_default_ss(T const* g_in, T* g_out, Layout1 const& layout1, Lay
 
   cp_async_fence();
   cp_async_wait<0>();
-  __syncthreads();
+  syncthreads();
 
   if(thread0()) {
     for(int i = 0; i < size(s1_tensor); ++i) {
       s1_tensor(i) += T(i);
     }
   }
-  __syncthreads();
+  syncthreads();
 
   cooperative_copy<ThreadBlockSize, MaxVecBits>(threadIdx.x, s1_tensor, s2_tensor);
-  __syncthreads();
+  syncthreads();
 
   cooperative_copy<ThreadBlockSize,  cute::sizeof_bits_v<T>>(threadIdx.x, s2_tensor, g_out_tensor);
 }
 
 // gg --> global to global
 template <int MaxVecBits, uint32_t ThreadBlockSize, class T, class Layout1, class Layout2>
-__device__ void
+CUTLASS_DEVICE void
 cooperative_copy_default_gg(T const* g_in, T* g_out, Layout1 const& layout1, Layout2 const& layout2)
 {
   using namespace cute;
@@ -137,7 +145,7 @@ cooperative_copy_default_gg(T const* g_in, T* g_out, Layout1 const& layout1, Lay
 }
 
 template <class Mode, int MaxVecBits, uint32_t ThreadBlockSize, class T, class Layout1, class Layout2>
-__global__ void
+CUTLASS_GLOBAL void
 cooperative_copy_default_kernel(T const* g_in, T* g_out, Layout1 const layout1, Layout2 const layout2)
 {
   if constexpr(std::is_same_v<Mode, cooperative_copy_mode::global_shared>) {
@@ -180,8 +188,8 @@ void test_cooperative_copy_default(Layout1 const& layout1, Layout2 const& layout
     uint32_t extra_elements = max_vec_bytes / sizeof(value_type);
 
     // Allocate
-    thrust::host_vector<value_type> h_in (count + extra_elements);
-    thrust::host_vector<value_type> h_out(count + extra_elements);
+    host_vector<value_type> h_in (count + extra_elements);
+    host_vector<value_type> h_out(count + extra_elements);
 
     // Initialize
     Tensor h_in_tensor  = make_tensor(h_in.data()  + extra_elements, gmem_layout_in);
@@ -193,8 +201,8 @@ void test_cooperative_copy_default(Layout1 const& layout1, Layout2 const& layout
     }
 
     // To GPU
-    thrust::device_vector<value_type> d_in = h_in;
-    thrust::device_vector<value_type> d_out(d_in.size(), value_type(float(-2)));
+    device_vector<value_type> d_in = h_in;
+    device_vector<value_type> d_out(d_in.size(), value_type(float(-2)));
 
     // Adds (MaxVecBits/8) bytes to shared memory as we'll move pointer by that many bytes inside the kernel to enforce
     // alignment to (MaxVecBits/8) bytes
@@ -203,6 +211,9 @@ void test_cooperative_copy_default(Layout1 const& layout1, Layout2 const& layout
 
     // Launch
     auto coop_copy = cooperative_copy_default_kernel<Mode, MaxVecBits, ThreadBlockSize, value_type, Layout1, Layout2>;
+    #if defined(CUTLASS_ENABLE_SYCL)
+    //TODO: Launch kernel using syclcompat with the Work group static launch property
+    #else
     ASSERT_EQ(cudaFuncSetAttribute(coop_copy, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(shared_memory_bytes)), cudaSuccess);
 
     auto d_in_ptr  = thrust::raw_pointer_cast(d_in.data()  + extra_elements);
@@ -214,9 +225,9 @@ void test_cooperative_copy_default(Layout1 const& layout1, Layout2 const& layout
       cudaError_t error = cudaGetLastError();
       FAIL() << "Error at kernel sync: " << cudaGetErrorString(error) << "\n";
     }
-
+    #endif
     // Validate
-    thrust::host_vector<value_type> h_result        = d_out;
+    host_vector<value_type> h_result        = d_out;
     Tensor                          h_result_tensor = make_tensor(h_result.data() + extra_elements, gmem_layout_out);
     for (int i = 0; i < cute::size(h_in_tensor); ++i) {
       ASSERT_EQ(h_result_tensor(i), h_out_tensor(i))

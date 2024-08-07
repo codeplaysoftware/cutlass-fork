@@ -38,65 +38,86 @@
 #include <vector>
 #include <numeric>
 
+#if defined(CUTLASS_ENABLE_SYCL)
+#include <syclcompat/syclcompat.hpp>
+#else
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
-
+#endif
 #include <cute/tensor.hpp>
 
 using namespace cute;
 
-__global__ void
+#ifdef CUTLASS_ENABLE_SYCL
+  using namespace syclcompat;
+#endif
+
+CUTLASS_GLOBAL void
 test(double const* g_in, double* g_out)
 {
-  extern __shared__ double smem[];
+  #ifdef CUTLASS_ENABLE_SYCL
+  //TODO: access shared memory via the work-group static extension
+  #else 
+    extern __shared__ double smem[];
+  #endif
+  smem[ThreadIdxX()] = g_in[ThreadIdxX()];
 
-  smem[threadIdx.x] = g_in[threadIdx.x];
+  syncthreads();
 
-  __syncthreads();
-
-  g_out[threadIdx.x] = 2 * smem[threadIdx.x];
+  g_out[ThreadIdxX()] = 2 * smem[ThreadIdxX()];
 }
 
-__global__ void
+CUTLASS_GLOBAL void
 test2(double const* g_in, double* g_out)
 {
   using namespace cute;
 
-  extern __shared__ double smem[];
+  #ifdef CUTLASS_ENABLE_SYCL
+  //TODO: access shared memory via the work-group static extension
+  #else
+    extern __shared__ double smem[];
+  #endif
 
-  auto s_tensor = make_tensor(make_smem_ptr(smem + threadIdx.x), Int<1>{});
-  auto g_tensor = make_tensor(make_gmem_ptr(g_in + threadIdx.x), Int<1>{});
+  auto s_tensor = make_tensor(make_smem_ptr(smem + ThreadIdxX()), Int<1>{});
+  auto g_tensor = make_tensor(make_gmem_ptr(g_in + ThreadIdxX()), Int<1>{});
 
   copy(g_tensor, s_tensor);
 
   cp_async_fence();
   cp_async_wait<0>();
-  __syncthreads();
+  syncthreads();
 
-  g_out[threadIdx.x] = 2 * smem[threadIdx.x];
+  g_out[ThreadIdxX()] = 2 * smem[ThreadIdxX()];
 }
 
 TEST(SM80_CuTe_Ampere, CpAsync)
 {
   constexpr int count = 32;
-  thrust::host_vector<double> h_in(count);
+  host_vector<double> h_in(count);
   for (int i = 0; i < count; ++i) {
     h_in[i] = double(i);
   }
 
-  thrust::device_vector<double> d_in(h_in);
+  device_vector<double> d_in(h_in);
 
-  thrust::device_vector<double> d_out(count, -1);
-  test<<<1, count, sizeof(double) * count>>>(
-    thrust::raw_pointer_cast(d_in.data()),
-    thrust::raw_pointer_cast(d_out.data()));
-  thrust::host_vector<double> h_result = d_out;
+  device_vector<double> d_out(count, -1);
+  #if defined(CUTLASS_ENABLE_SYCL)
+  //TODO: Launch kernel using syclcompat with the Work group static launch property
+  #else
+    test<<<1, count, sizeof(double) * count>>>(
+      thrust::raw_pointer_cast(d_in.data()),
+      thrust::raw_pointer_cast(d_out.data()));
+  #endif
+  host_vector<double> h_result = d_out;
 
-  thrust::device_vector<double> d_out_cp_async(count, -2);
-  test2<<<1, count, sizeof(double) * count>>>(
-    thrust::raw_pointer_cast(d_in.data()),
-    thrust::raw_pointer_cast(d_out_cp_async.data()));
-  thrust::host_vector<double> h_result_cp_async = d_out_cp_async;
+  device_vector<double> d_out_cp_async(count, -2);
+  #if defined(CUTLASS_ENABLE_SYCL)
+  #else
+    test2<<<1, count, sizeof(double) * count>>>(
+      thrust::raw_pointer_cast(d_in.data()),
+      thrust::raw_pointer_cast(d_out_cp_async.data()));
+  #endif
+  host_vector<double> h_result_cp_async = d_out_cp_async;
 
   for (int i = 0; i < count; ++i) {
     EXPECT_EQ(h_result[i], h_result_cp_async[i]);

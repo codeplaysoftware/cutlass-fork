@@ -51,14 +51,18 @@ struct SharedStorage {
 
 #if CUDA_12_0_SM90_FEATURES_SUPPORTED
 template <class T, class GmemLayout, class SmemLayout>
-__global__ void
+CUTLASS_GLOBAL void
 bulk_copy_test_device_cute(T const* g_in,
                            T      * g_out,
                            GmemLayout gmem_layout,
                            SmemLayout smem_layout)
 {
   // Use Shared Storage structure to allocate and distribute aligned SMEM addresses
+  #if defined(CUTLASS_ENABLE_SYCL)
+  //TODO: access shared memory via the work-group static extension
+  #else
   extern __shared__ char shared_memory[];
+  #endif
   using SharedStorage = SharedStorage<T, SmemLayout>;
   SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(shared_memory);
 
@@ -78,7 +82,7 @@ bulk_copy_test_device_cute(T const* g_in,
 
   cp_async_fence();
   cp_async_wait<0>();
-  __syncthreads();
+  syncthreads();
 
   //
   // Perform the BULK_COPY store
@@ -105,21 +109,25 @@ template <class T, class GLayout, class SLayout>
 void run_and_validate(GLayout gmem_layout,
                       SLayout smem_layout)
 {
-  thrust::host_vector<T> h_in(cosize(gmem_layout));
+  host_vector<T> h_in(cosize(gmem_layout));
   for (size_t i = 0; i < h_in.size(); ++i) {
     h_in[i] = static_cast<T>(int(i));
   }
 
-  thrust::device_vector<T> d_in = h_in;
-  thrust::device_vector<T> d_out(d_in.size(), T(-1));
+  device_vector<T> d_in = h_in;
+  device_vector<T> d_out(d_in.size(), T(-1));
 
   int32_t smem_size = static_cast<int32_t>(sizeof(SharedStorage<T, decltype(smem_layout)>));
+  #if defined(CUTLASS_ENABLE_SYCL)
+  //TODO: Launch kernel using syclcompat with the Work group static launch property
+  #else
   bulk_copy_test_device_cute<<<1, 128, smem_size>>>(thrust::raw_pointer_cast(d_in.data()),
                                                     thrust::raw_pointer_cast(d_out.data()),
                                                     gmem_layout,
                                                     smem_layout);
+  #endif
   // Transfering results back to host
-  thrust::host_vector<T> h_out = d_out;
+  host_vector<T> h_out = d_out;
 
   // Validate the results
   for (int i = 0; i < cute::size(gmem_layout); ++i) {
