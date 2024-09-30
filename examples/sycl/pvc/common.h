@@ -58,3 +58,7 @@ bool initialize_block(
        block.get(), block.size(), seed, scope_max, scope_min, 0);
   return true;
 }
+
+size_t get_llc_size() {
+  return syclcompat::get_default_queue().get_device().get_info<sycl::info::device::global_mem_cache_size>();   
+}
