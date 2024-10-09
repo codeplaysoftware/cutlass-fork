@@ -30,8 +30,6 @@
  **************************************************************************************************/
 
 #include "cutlass/epilogue/collective/default_epilogue.hpp"
-#include "cutlass/epilogue/collective/xe_epilogue.hpp"
-#include "cutlass/epilogue/fusion/xe_callbacks.hpp"
 #include "cutlass/gemm/device/gemm_universal.h"
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/gemm/collective/collective_mma.hpp"
@@ -45,11 +43,10 @@
 #include "cutlass/util/packed_stride.hpp"
 #include "cutlass/util/reference/device/gemm_complex.h"
 #include "cutlass/util/reference/device/tensor_compare.h"
-#include "cutlass/util/reference/device/tensor_relu.h"
-#include "cutlass/tensor_view.h"
-#include "cutlass/coord.h"
-
 #include "common.hpp"
+
+#include "cutlass/util/device_memory.h"
+#include "cutlass/util/reference/device/sycl_tensor_fill.h"
 
 using namespace cute;
 
@@ -67,7 +64,7 @@ struct Options {
   Options():
     help(false),
     error(false),
-    m(5120), n(4096), k(4096), l(1), iterations(100),
+    m(128), n(128), k(128), l(1), iterations(20),
     alpha(1.f), beta(0.f)
   { }
 
@@ -80,9 +77,9 @@ struct Options {
       return;
     }
 
-    cmd.get_cmd_line_argument("m", m, 5120);
-    cmd.get_cmd_line_argument("n", n, 4096);
-    cmd.get_cmd_line_argument("k", k, 4096);
+    cmd.get_cmd_line_argument("m", m, 128);
+    cmd.get_cmd_line_argument("n", n, 128);
+    cmd.get_cmd_line_argument("k", k, 128);
     cmd.get_cmd_line_argument("l", l, 1);
     cmd.get_cmd_line_argument("alpha", alpha, 1.f);
     cmd.get_cmd_line_argument("beta", beta, 0.f);
@@ -182,12 +179,6 @@ struct ExampleRunner {
           M * N, // batch_stride_C
           M * N  // batch_stride_D
         );
-
-    syclcompat::wait();
-
-    using TensorView = cutlass::TensorView<ElementOutput, LayoutD>;
-    cutlass::reference::device::TensorReLu(TensorView(block_ref_D.get(), LayoutD::packed({M, N}),
-                                                      cutlass::make_Coord(M, N)));
 
     syclcompat::wait();
 
@@ -307,8 +298,8 @@ int main(int argc, const char** argv)
   // elements in input matrices.
   using ElementAccumulator = float;                   // <- data type of accumulator
   using ElementComputeEpilogue = float;  // <- data type of epilogue operations
-  using ElementInputA = bfloat16_t;                        // <- data type of elements in input matrix A
-  using ElementInputB = bfloat16_t;                        // <- data type of elements in input matrix B
+  using ElementInputA = float;                        // <- data type of elements in input matrix A
+  using ElementInputB = float;                        // <- data type of elements in input matrix B
   using ElementOutput = float;                        // <- data type of elements in output matrix D
 
   using LayoutA = cutlass::layout::RowMajor;
@@ -316,39 +307,42 @@ int main(int argc, const char** argv)
   using LayoutC = cutlass::layout::RowMajor;
   using LayoutD = cutlass::layout::RowMajor;
 
-  using GmemTiledCopyA = XE_2D_U16x8x16x4x2_LD_N;
-  using GmemTiledCopyB = XE_2D_U16x16x16x2x2_V;
+  using TileShape = Shape<_4, _4, _8>;
 
-  // Workgroup-level tile
-  using TileShape = Shape<_256, _256, _32>;
+  using TiledMma = TiledMMA<MMA_Atom<UniversalFMA<ElementOutput, ElementInputA, ElementInputB, ElementAccumulator>>,
+                            Layout<Shape<_4, _4, _1>>>;
 
-  using TiledMma = TiledMMA<MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>,
-          Layout<Shape<_1,_1,_1>>,
-          Tile<_32,_64,_32>>;  // Subgroup level-tile
+  using GmemTiledCopyA = decltype(
+        make_tiled_copy(Copy_Atom<UniversalCopy<ElementInputA>, ElementInputA>{},
+                        Layout<Shape<_4, _4>, Stride<_4, _1>>{},
+                        Layout<Shape<_1, _1>>{}
+        ));
 
-  constexpr int PipelineStages = 3;
-  using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelPVC<PipelineStages>;
-  using EpilogueDispatchPolicy = cutlass::epilogue::IntelPVCEpilogue;
+  using GmemTiledCopyB = decltype(
+        make_tiled_copy(Copy_Atom<UniversalCopy<ElementInputB>, ElementInputB>{},
+                        Layout<Shape<_4, _4>, Stride <_1, _4>>{},
+                        Layout<Shape<_1, _1>>{}
+        ));
 
-  using EpilogueOp = cutlass::epilogue::fusion::LinCombEltAct<cutlass::epilogue::thread::ReLu, ElementOutput,
-          ElementComputeEpilogue, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
+  using SmemLayoutAtomA = Layout<Shape<_4, _8>, Stride<_1, _4>>;
+  using SmemLayoutAtomB = Layout<Shape<_4, _8>, Stride<_1, _4>>;
 
-  using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
-          decltype(tile_shape(TiledMma()))>;
-  using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogue<
-          EpilogueDispatchPolicy,
-          TileShape,
+  using GEMMDispatchPolicy = cutlass::gemm::MainloopDeviceAgnostic;
+  using EpilogueOp = cutlass::epilogue::thread::LinearCombination<
           ElementAccumulator,
-          cutlass::gemm::TagToStrideC_t<LayoutC>,
-          ElementOutput,
-          cutlass::gemm::TagToStrideC_t<LayoutD>,
-          FusionCallBacks,
-          XE_2D_U32x8x16x1x1_LD_N,
-          void, void,
-          XE_2D_U32x8x16x1x1_ST_N,
-          void, void>;
+          1,
+          ElementComputeEpilogue,
+          ElementOutput>;
 
-// Mainloop
+  using CollectiveEpilogue = cutlass::epilogue::collective::DefaultEpilogue<
+          cutlass::detail::TagToStrideC_t<LayoutC>,
+          cutlass::detail::TagToStrideC_t<LayoutD>,
+          EpilogueOp,
+          cutlass::gemm::EpilogueDefault>;
+
+  using SmemCopyAtomA = Copy_Atom<UniversalCopy<ElementInputA>, ElementInputA>;
+  using SmemCopyAtomB = Copy_Atom<UniversalCopy<ElementInputB>, ElementInputB>;
+
   using CollectiveMainloop = cutlass::gemm::collective::CollectiveMma<
           GEMMDispatchPolicy,
           TileShape,
@@ -357,8 +351,8 @@ int main(int argc, const char** argv)
           ElementInputB,
           cutlass::gemm::TagToStrideB_t<LayoutB>,
           TiledMma,
-          GmemTiledCopyA, void, void, cute::identity,  // A
-          GmemTiledCopyB, void, void, cute::identity   // B
+          GmemTiledCopyA, SmemLayoutAtomA, SmemCopyAtomA, cute::identity,  // A
+          GmemTiledCopyB, SmemLayoutAtomB, SmemCopyAtomB, cute::identity   // B
   >;
 
   using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
@@ -372,6 +366,5 @@ int main(int argc, const char** argv)
   ExampleRunner<Gemm> runner;
 
   runner.run(options, hw_info);
-
   return 0;
 }

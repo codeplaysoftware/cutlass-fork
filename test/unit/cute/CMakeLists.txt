@@ -79,8 +79,7 @@ else()
       test_unit_cute_layout
       test_unit_cute_core
     )
-  endif()
-  if (SYCL_INTEL_TARGET)
+  elseif (SYCL_INTEL_TARGET)
   
   add_custom_target(
     cutlass_test_unit_cute
@@ -96,5 +95,19 @@ else()
     test_unit_cute_core
   )
 
+  else()
+  add_custom_target(
+    cutlass_test_unit_cute
+    DEPENDS
+    cutlass_test_unit_cute_layout
+    cutlass_test_unit_cute_core
+  )
+
+  add_custom_target(
+    test_unit_cute
+    DEPENDS
+    test_unit_cute_layout
+    test_unit_cute_core
+  )
   endif()
 endif()
