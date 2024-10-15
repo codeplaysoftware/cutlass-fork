@@ -186,6 +186,10 @@ class PredicatedTileAccessIteratorPredicates {
   CUTLASS_HOST_DEVICE
   void set_predicates(int thread_id, TensorCoord const &threadblock_offset) {
 
+#if defined(CUTLASS_ENABLE_SYCL)
+    using namespace sycl;
+#endif
+
     TensorCoord residue_extent;
     if (kAdvanceRank) {
 

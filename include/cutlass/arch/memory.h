@@ -65,6 +65,8 @@ struct global_load;
      (__CUDACC_VER_MAJOR__ > 11)) &&                                  \
     defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 750)
   #define CUTLASS_ENABLE_L2_PREFETCH 1
+#elif defined(__SYCL_CUDA_ARCH__) && (__SYCL_CUDA_ARCH__ >= 750)
+  #define CUTLASS_ENABLE_L2_PREFETCH 1
 #else
   #define CUTLASS_ENABLE_L2_PREFETCH 0
 #endif

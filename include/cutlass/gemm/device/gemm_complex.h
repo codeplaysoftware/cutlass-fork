@@ -45,6 +45,10 @@
 #include "cutlass/gemm/kernel/default_gemm_complex.h"
 #include "cutlass/gemm/device/default_gemm_configuration.h"
 
+#if defined(CUTLASS_ENABLE_SYCL)
+#include "cutlass/util/sycl_event_manager.hpp"
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass {
@@ -445,8 +449,19 @@ public:
       }
     }
 
-    cutlass::Kernel<GemmKernel><<<grid, block, smem_size, stream>>>(params_);
+#if defined(CUTLASS_ENABLE_SYCL)
+    const auto sycl_block = syclcompat::dim3(block.x, block.y, block.z);
+    const auto sycl_grid = syclcompat::dim3(grid.x, grid.y, grid.z);
 
+    using namespace syclcompat::experimental;
+
+    auto event = launch<cutlass::Kernel<GemmKernel>>(launch_policy{
+      sycl_grid, sycl_block, local_mem_size{static_cast<std::size_t>(smem_size)}},
+      params_);
+    EventManager::getInstance().addEvent(event);
+#else
+    cutlass::Kernel<GemmKernel><<<grid, block, smem_size, stream>>>(params_);
+#endif
     result = cudaGetLastError();
 
     return result == cudaSuccess ? Status::kSuccess : Status::kErrorInternal;

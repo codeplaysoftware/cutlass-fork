@@ -182,11 +182,11 @@ private:
   CUTLASS_DEVICE
   void apply(Params const &params, SharedStorage &shared_storage) {
 
-    int tid = threadIdx.x;
-    int bid = blockIdx.x;
-    int bdim = blockDim.x;
+    int tid = ThreadIdxX();
+    int bid = BlockIdxX();
+    int bdim = BlockDimX();
     
-    int block_batch = blockIdx.z;
+    int block_batch = BlockIdxZ();
 
     // defining three vars for a general reduction module
     cutlass::gemm::GemmCoord problem_size = isGroupedProblem ? params.args.problem_sizes[bid] : params.args.problem_size;

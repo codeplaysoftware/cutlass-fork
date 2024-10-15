@@ -69,6 +69,13 @@
 #define CUTLASS_GLOBAL __global__ static
 #define CUTLASS_SHARED __shared__
 #endif
+
+#if defined(__CUDA_ARCH__)
+#define CUTLASS_CONSTANT __constant__
+#else
+#define CUTLASS_CONSTANT constexpr
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>

@@ -428,7 +428,7 @@ public:
     };
 
     // Compute position within threadblock
-    int thread_idx = threadIdx.x;
+    int thread_idx = ThreadIdxX();
 
     // Construct iterators to A and B operands
     typename Mma::IteratorA iterator_A(
@@ -447,9 +447,9 @@ public:
 
     // Broadcast the warp_id computed by lane 0 to ensure dependent code
     // is compiled as warp-uniform.
-    int warp_idx = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
+    int warp_idx = shfl_sync(0xffffffff, ThreadIdxX() / 32, 0);
 
-    int lane_idx = threadIdx.x % 32;
+    int lane_idx = ThreadIdxX() % 32;
 
     //
     // Main loop
@@ -505,7 +505,7 @@ public:
       params.ptr_Max,
       params.ptr_Sum,
       threadblock_offset,
-      blockIdx.y *params.problem_size.m() );
+      BlockIdxY() *params.problem_size.m() );
 
     if (params.mode == GemmUniversalMode::kGemm) {
       // Indicate which position in a serial reduction the output operator is currently updating

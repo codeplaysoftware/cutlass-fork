@@ -295,6 +295,18 @@ unsigned int shfl_sync(
 #endif
 }
 
+template <typename T>
+CUTLASS_DEVICE
+T shfl_xor_sync(unsigned mask, T var, int laneMask, int width=NumThreadsPerWarp) {
+#if defined(__CUDA_ARCH__)
+  return __shfl_xor_sync(mask, var, laneMask, width);
+#elif defined(__SYCL_DEVICE_ONLY__)
+  auto g = syclcompat::get_nd_item<1>().get_sub_group();
+  return syclcompat::permute_sub_group_by_xor(g, var, laneMask, width);
+#else
+  return T(0.0);
+#endif
+}
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 /*
@@ -324,7 +336,7 @@ CUTLASS_DEVICE int atomicAdd(int *address, int val) {
 
 CUTLASS_DEVICE int atomicCAS(int *address, int compare, int val) {
 #if defined(__SYCL_DEVICE_ONLY__)
-  syclcompat::atomic_compare_exchange_strong(address, compare, val);
+  return syclcompat::atomic_compare_exchange_strong(address, compare, val);
 #endif
   return 0;
 }

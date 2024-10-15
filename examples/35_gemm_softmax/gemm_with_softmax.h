@@ -201,12 +201,12 @@ private:
 
     using AccessTypeD = AlignedArray<ElementD, kAlignment>;
 
-    int block_batch = blockIdx.z;
-    int block_m = blockIdx.x * ApplyShape::kRow;
+    int block_batch = BlockIdxZ();
+    int block_m = BlockIdxX() * ApplyShape::kRow;
     int block_n = 0;
 
-    int thread_m = threadIdx.y;
-    int thread_n = threadIdx.x * kAlignment;
+    int thread_m = ThreadIdxY();
+    int thread_n = ThreadIdxX() * kAlignment;
 
     int idx_m = block_m + thread_m;
     int idx_n = block_n + thread_n;
@@ -580,6 +580,17 @@ public:
 
     cudaError_t result;
 
+#if defined(CUTLASS_ENABLE_SYCL)
+    const auto sycl_block = syclcompat::dim3(gemm_block.x, gemm_block.y, gemm_block.z);
+    const auto sycl_grid = syclcompat::dim3(gemm_grid.x, gemm_grid.y, gemm_grid.z);
+
+    using namespace syclcompat::experimental;
+
+    auto gemm_event = launch<cutlass::Kernel<GemmKernel>>(launch_policy{
+      sycl_grid, sycl_block, local_mem_size{static_cast<std::size_t>(gemm_smem_size)}},
+      params_.gemm);
+    EventManager::getInstance().addEvent(gemm_event);
+#else
     if (gemm_smem_size >= (48 << 10)) {
       result = cudaFuncSetAttribute(cutlass::Kernel<GemmKernel>,
                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
@@ -591,6 +602,7 @@ public:
     }
 
     cutlass::Kernel<GemmKernel><<<gemm_grid, gemm_block, gemm_smem_size, stream>>>(params_.gemm);
+#endif
 
     result = cudaGetLastError();
 
@@ -613,9 +625,21 @@ public:
     dim3 final_reduction_grid(block_per_row, 1, params_.softmax.args.batch_count);
     dim3 final_reduction_block(thread_per_block);
 
+#if defined(CUTLASS_ENABLE_SYCL)
+    const auto sycl_final_reduction_block = syclcompat::dim3(final_reduction_block.x, final_reduction_block.y, final_reduction_block.z);
+    const auto sycl_final_reduction_grid = syclcompat::dim3(final_reduction_grid.x, final_reduction_grid.y, final_reduction_grid.z);
+
+    using namespace syclcompat::experimental;
+
+    auto final_reduction_event = launch<Kernel<ApplyFinalReductionKernel>>(launch_policy{
+      sycl_final_reduction_grid, sycl_final_reduction_block, local_mem_size{sizeof(typename ApplyFinalReductionKernel::SharedStorage)}},
+      params_.reduction);
+    EventManager::getInstance().addEvent(final_reduction_event);
+#else
     Kernel<ApplyFinalReductionKernel><<<
       final_reduction_grid, final_reduction_block, sizeof(typename ApplyFinalReductionKernel::SharedStorage), stream
     >>>(params_.reduction);
+#endif
 
     result = cudaGetLastError();
 
@@ -637,9 +661,21 @@ public:
       (params_.softmax.args.extent.column() + threadblock_columns - 1) / threadblock_columns,
       params_.softmax.args.batch_count);
 
+#if defined(CUTLASS_ENABLE_SYCL)
+    const auto sycl_apply_block = syclcompat::dim3(apply_block.x, apply_block.y, apply_block.z);
+    const auto sycl_apply_grid = syclcompat::dim3(apply_grid.x, apply_grid.y, apply_grid.z);
+
+    using namespace syclcompat::experimental;
+
+    auto apply_event = launch<Kernel<SoftmaxApplyKernel>>(launch_policy{
+      sycl_apply_grid, sycl_apply_block, local_mem_size{sizeof(typename SoftmaxApplyKernel::SharedStorage)}},
+      params_.softmax);
+    EventManager::getInstance().addEvent(apply_event);
+#else
     Kernel<SoftmaxApplyKernel><<<
       apply_grid, apply_block, sizeof(typename SoftmaxApplyKernel::SharedStorage), stream
     >>>(params_.softmax);
+#endif
 
     result = cudaGetLastError();
 

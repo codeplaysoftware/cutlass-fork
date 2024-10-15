@@ -45,6 +45,10 @@ using int4 = struct alignas(16) {
   int x, y, z, w;
 };
 
+using uint1 = struct alignas(4) {
+  unsigned int x;
+};
+
 using uint2 = struct alignas(8) {
   unsigned int x, y;
 };

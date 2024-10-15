@@ -217,7 +217,8 @@ public:
   /// Number of partitions along K dimension
   static int const kPartitionsK = PartitionsK_;
 
-  #if defined(__CUDA_ARCH__) && ((__CUDA_ARCH__ < 800) || (__CUDA_ARCH__ == 890)) 
+  #if (defined(__CUDA_ARCH__) && ((__CUDA_ARCH__ < 800) || (__CUDA_ARCH__ == 890))) || \
+      (defined(__SYCL_CUDA_ARCH__) && ((__SYCL_CUDA_ARCH__ < 800) || (__SYCL_CUDA_ARCH__ == 890)))
     static int const kVerticalVisit = true;
   #else
     static int const kVerticalVisit = false;

@@ -52,7 +52,11 @@
 #include "cutlass/util/reference/host/tensor_compare.h"
 #include "cutlass/util/reference/host/tensor_norm.h"
 #include "cutlass/util/reference/host/tensor_copy.h"
+#if defined(CUTLASS_ENABLE_SYCL)
+#include "cutlass/util/reference/device/sycl_tensor_fill.h"
+#else
 #include "cutlass/util/reference/device/tensor_fill.h"
+#endif
 #include "cutlass/util/reference/host/tensor_fill.h"
 #include "cutlass/util/reference/host/error_metrics.h"
 #include "cutlass/util/tensor_view_io.h"
@@ -60,6 +64,8 @@
 #include "cutlass/layout/matrix.h"
 #include "cutlass/epilogue/thread/linear_combination.h"
 /////////////////////////////////////////////////////////////////////////////////////////////////
+
+#include <helper.h>
 
 #include "gemm_with_softmax.h"
 
@@ -159,6 +165,8 @@ struct Options {
   /// Returns true if the environment and Toolkit support this
   bool supported(bool verbose = true) const {
 
+#if !defined(CUTLASS_ENABLE_SYCL)
+
     // Ampere Tensor Core operations exposed with mma.sync and ldmatrix are first available
     // in CUDA 11.0.
     //
@@ -187,7 +195,7 @@ struct Options {
       }
       return false;
     }
-
+#endif
     return true;
   }
 };
@@ -333,12 +341,16 @@ struct Testbed {
       return disposition;
     }
 
+#if defined(CUTLASS_ENABLE_SYCL)
+    syclcompat::wait();
+#else
     cudaError_t result = cudaDeviceSynchronize();
     if (result != cudaSuccess) {
       std::cerr << "Device synchronize failed with error "
         << cudaGetErrorString(result) << std::endl;
       return disposition;
     }
+#endif
 
     //
     // Verify
@@ -513,6 +525,10 @@ struct Testbed {
         ElementCompute(0)
       );
 
+#if defined(CUTLASS_ENABLE_SYCL)
+      syclcompat::wait();
+#endif
+
       // Copy reference results to host memory for verification
       std::vector<ElementD> matrix_D_Ref(layout_C.capacity(extent_C));
       cutlass::device_memory::copy_to_host(matrix_D_Ref.data(), block_Ref.get(), matrix_D_Ref.size());
@@ -597,25 +613,10 @@ struct Testbed {
     //
 
     cutlass::Status status = cutlass::Status::kSuccess;
-    cudaError_t result;
-    cudaEvent_t events[2];
+    GpuTimer timer;
     int const kIterations = options.iterations;
 
-    for (cudaEvent_t &evt : events) {
-      result = cudaEventCreate(&evt);
-      if (result != cudaSuccess) {
-        std::cerr << "cudaEventCreate failed with error " << cudaGetErrorString(result) << std::endl;
-        return false;
-      }
-    }
-
-    result = cudaEventRecord(events[0]);
-
-    if (result != cudaSuccess) {
-      std::cerr << "cudaEventRecord() failed with error " << cudaGetErrorString(result) << std::endl;
-      return false;
-    }
-
+    timer.start();
     for (int iter = 0; iter < kIterations; ++iter) {
 
       status = execute_device_kernel();
@@ -625,36 +626,9 @@ struct Testbed {
         return false;
       }
     }
+    timer.stop();
 
-    result = cudaEventRecord(events[1]);
-
-    if (result != cudaSuccess) {
-      std::cerr << "cudaEventRecord() failed with error " << cudaGetErrorString(result) << std::endl;
-      return false;
-    }
-
-    result = cudaDeviceSynchronize();
-
-    if (result != cudaSuccess) {
-      std::cerr << "cudaDeviceSynchronize() failed with error " << cudaGetErrorString(result) << std::endl;
-      return false;
-    }
-
-    float elapsed_ms = 0;
-    result = cudaEventElapsedTime(&elapsed_ms, events[0], events[1]);
-
-    if (result != cudaSuccess) {
-      std::cerr << "cudaEventElapsedTime() failed with error " << cudaGetErrorString(result) << std::endl;
-      return false;
-    }
-
-    for (cudaEvent_t &evt : events) {
-      result = cudaEventDestroy(evt);
-      if (result != cudaSuccess) {
-        std::cerr << "cudaEventDestroy() failed with error " << cudaGetErrorString(result) << std::endl;
-        return false;
-      }
-    }
+    float elapsed_ms = timer.elapsed_millis();
 
     int64_t flops = int64_t(options.problem_size.m()) * options.problem_size.n() * options.problem_size.k() * 2;
     int64_t bytes = (sizeof(ElementD) * 2 + sizeof(ElementSoftmax)) * options.problem_size.m() * options.problem_size.n();

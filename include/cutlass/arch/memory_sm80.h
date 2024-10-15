@@ -41,7 +41,7 @@
 #include "cutlass/arch/memory_sm75.h"
 #include "cutlass/arch/cache_operation.h"
 
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)) || (defined(__SYCL_CUDA_ARCH__) && (__SYCL_CUDA_ARCH__ >= 800))
   #define CUDA_CP_ASYNC_ACTIVATED 1
 #else
   #define CUDA_CP_ASYNC_ACTIVATED 0
@@ -194,7 +194,7 @@ struct cp_async_nan<16, CacheOperation::Always> {
   cp_async_nan(void *smem_ptr, void const *global_ptr, bool pred_guard) {
     #if CUDA_CP_ASYNC_ACTIVATED
 
-      static __constant__ uint4 OOB_NAN_F16x8 = {OOB_NAN_F16x2, OOB_NAN_F16x2,
+      static CUTLASS_CONSTANT uint4 OOB_NAN_F16x8 = {OOB_NAN_F16x2, OOB_NAN_F16x2,
                                                  OOB_NAN_F16x2, OOB_NAN_F16x2};
 
       unsigned smem_int_ptr = cutlass_get_smem_pointer(smem_ptr);
@@ -236,9 +236,9 @@ struct cp_async_diag <Element_, false> {
     #if CUDA_CP_ASYNC_ACTIVATED
 
       /// Values for the diagonal elements of the triangular input matrix
-      static __constant__ uint2 DIAG_DATA_DOUBLE_ONE = {0x3ff00000, 0x00000000};
-      static __constant__ uint1 DIAG_DATA_FLOAT_ONE = {0x3f800000};
-      static __constant__ uint1 DIAG_DATA_ZERO = {0x00000000};
+      static CUTLASS_CONSTANT uint2 DIAG_DATA_DOUBLE_ONE = {0x3ff00000, 0x00000000};
+      static CUTLASS_CONSTANT uint1 DIAG_DATA_FLOAT_ONE = {0x3f800000};
+      static CUTLASS_CONSTANT uint1 DIAG_DATA_ZERO = {0x00000000};
 
       unsigned smem_int_ptr = cutlass_get_smem_pointer(smem_ptr);
 
@@ -283,7 +283,7 @@ struct cp_async_diag <Element_, true> {
     #if CUDA_CP_ASYNC_ACTIVATED
 
       /// Values for the diagonal elements of the triangular input matrix
-      static __constant__ uint1 DIAG_DATA_ZERO = {0x00000000};
+      static CUTLASS_CONSTANT uint1 DIAG_DATA_ZERO = {0x00000000};
 
       unsigned smem_int_ptr = cutlass_get_smem_pointer(smem_ptr);
 
@@ -397,7 +397,7 @@ struct cp_async_nan<16, CacheOperation::Global> {
   cp_async_nan(void *smem_ptr, void const *global_ptr, bool pred_guard) {
     #if CUDA_CP_ASYNC_ACTIVATED
 
-      static __constant__ uint4 OOB_NAN_F16x8 = {OOB_NAN_F16x2, OOB_NAN_F16x2,
+      static CUTLASS_CONSTANT uint4 OOB_NAN_F16x8 = {OOB_NAN_F16x2, OOB_NAN_F16x2,
                                                  OOB_NAN_F16x2, OOB_NAN_F16x2};
 
       unsigned smem_int_ptr = cutlass_get_smem_pointer(smem_ptr);

@@ -381,11 +381,11 @@ public:
     // Compute accumulate sum only in the last step
     accum_sum_ = warp_reduce_sum_(accum_sum_);
 
-    bool is_first_thread_in_tile = ((threadIdx.x % kThreadsPerRow) == 0);
+    bool is_first_thread_in_tile = ((ThreadIdxX() % kThreadsPerRow) == 0);
     bool row_guard = thread_offset_.row() < extent_.row();
     bool is_write_thread = row_guard && is_first_thread_in_tile;
 
-    int block_batch = blockIdx.z;
+    int block_batch = BlockIdxZ();
 
     ElementNorm *curr_ptr_max = ptr_Max_ + thread_offset_.row() + column_offset_ + block_batch * params_.batch_stride_Max;
     ElementSum *curr_ptr_sum = ptr_Sum_ + thread_offset_.row() + column_offset_ + block_batch * params_.batch_stride_Sum;
@@ -434,7 +434,7 @@ private:
     int half_thread_in_row = (kThreadsPerRow >> 1);
     CUTLASS_PRAGMA_UNROLL
     for (int i = half_thread_in_row; i > 0; i >>= 1) {
-      ElementSoftmaxCompute tmp = __shfl_xor_sync(0xFFFFFFFF, sum_, i);
+      ElementSoftmaxCompute tmp = shfl_xor_sync(0xFFFFFFFF, sum_, i);
       sum_ += tmp;
     }
     return sum_;
@@ -445,7 +445,7 @@ private:
     int half_thread_in_row = (kThreadsPerRow >> 1);
     CUTLASS_PRAGMA_UNROLL
     for (int i = half_thread_in_row; i > 0; i >>= 1) {
-      ElementSoftmaxCompute tmp = __shfl_xor_sync(0xFFFFFFFF, max_, i);
+      ElementSoftmaxCompute tmp = shfl_xor_sync(0xFFFFFFFF, max_, i);
       max_ = fast_max(max_, tmp);
     }
     return max_;
