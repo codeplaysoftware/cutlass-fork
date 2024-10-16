@@ -59,7 +59,7 @@ template <
   typename InnerProductOp,
   typename ConvertOp
 >
-__global__ void Gemm(
+CUTLASS_GLOBAL void Gemm(
   gemm::GemmCoord problem_size,
   ScalarType alpha,
   TensorRefA tensor_a,
@@ -71,8 +71,8 @@ __global__ void Gemm(
 
   // Map each thread to a unique tile of the output matrix
   MatrixCoord output_coord(
-    MatrixCoord::Index((threadIdx.x + blockIdx.x * blockDim.x) * OutputTile::kRow),
-    MatrixCoord::Index((threadIdx.y + blockIdx.y * blockDim.y) * OutputTile::kColumn)
+    MatrixCoord::Index((ThreadIdxX() + BlockIdxX() * BlockDimX()) * OutputTile::kRow),
+    MatrixCoord::Index((ThreadIdxY() + BlockIdxY() * BlockDimY()) * OutputTile::kColumn)
   );
 
   // Compute the general matrix product
@@ -110,7 +110,7 @@ template <
   typename InnerProductOp,
   typename ConvertOp
 >
-__global__ void BatchedGemm(
+CUTLASS_GLOBAL void BatchedGemm(
   gemm::GemmCoord problem_size,
   ScalarType alpha,
   TensorRefCollectionA tensor_collection_a,
@@ -120,7 +120,7 @@ __global__ void BatchedGemm(
   AccumulatorType initial_accum) {
 
   // Obtain batch ID
-  int batch_id = blockIdx.z;
+  int batch_id = BlockIdxZ();
 
   // Dereference based on batch_id
   typename TensorRefCollectionA::TensorRef tensor_a = tensor_collection_a.at(batch_id);
@@ -129,8 +129,8 @@ __global__ void BatchedGemm(
 
   // Map each thread to a unique tile of the output matrix
   MatrixCoord output_coord(
-    (threadIdx.x + blockIdx.x * blockDim.x) * OutputTile::kColumn,
-    (threadIdx.y + blockIdx.y * blockDim.y) * OutputTile::kRow
+    (ThreadIdxX() + BlockIdxX() * BlockDimX()) * OutputTile::kColumn,
+    (ThreadIdxY() + BlockIdxY() * BlockDimY()) * OutputTile::kRow
   );
 
   // Compute the general matrix product

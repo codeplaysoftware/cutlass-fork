@@ -37,8 +37,11 @@
 
 #include "cutlass/cutlass.h"
 
-#if (defined(__CUDA_ARCH__) &&\
-    (__CUDA_ARCH__ >= 900) && (__CUDACC_VER_MAJOR__ >= 12) && defined(__CUDA_ARCH_FEAT_SM90_ALL))
+#if (((defined(__CUDA_ARCH__) && \
+    (__CUDA_ARCH__ >= 900) && (__CUDACC_VER_MAJOR__ >= 12)) || \
+    (defined(__SYCL_CUDA_ARCH__) && (__SYCL_CUDA_ARCH__ >= 900) &&\
+     defined(__PTX_VERSION__) && (__PTX_VERSION__ >= 80))) \
+     && defined(__CUDA_ARCH_FEAT_SM90_ALL))
     #define CUDA_CTA_RECONFIG_ACTIVATED 1
 #endif
 

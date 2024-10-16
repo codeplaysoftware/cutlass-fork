@@ -56,7 +56,7 @@ struct LinearCombinationParams {
   LinearCombinationParams(ElementCompute alpha, ElementCompute beta) 
   : alpha_data {0lu, 0lu}, beta_data {0lu, 0lu} 
   {
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__SYCL_CUDA_ARCH__)
     reinterpret_cast<ElementCompute&>(alpha_data) = alpha;
     reinterpret_cast<ElementCompute&>(beta_data) = beta;
 #else

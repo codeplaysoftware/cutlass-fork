@@ -355,7 +355,7 @@ struct SM90_TMA_LOAD_IM2COL_3D
     uint64_t gmem_int_desc = reinterpret_cast<uint64_t>(desc_ptr);
     uint32_t smem_int_mbar = cast_smem_ptr_to_uint(mbar_ptr);
     uint32_t smem_int_ptr  = cast_smem_ptr_to_uint(smem_ptr);
-    // Copy from global to shared::cluster.
+    // Copy from global to shared::cluster
     asm volatile (
       "cp.async.bulk.tensor.3d.shared::cluster.global.im2col.mbarrier::complete_tx::bytes"
       " [%0], [%1, {%3, %4, %5}], [%2], {%6};"
@@ -1113,7 +1113,7 @@ CUTE_HOST_DEVICE static void
 tma_store_fence() {
 #if defined(CUTE_ARCH_TMA_SM90_ENABLED)
     asm volatile ("fence.proxy.async.shared::cta;");
-#elif defined(__CUDA_ARCH__)
+#elif defined(__CUDA_ARCH__) || (__SYCL_CUDA_ARCH__)
     CUTE_INVALID_CONTROL_PATH("Trying to use tma without CUTE_ARCH_TMA_SM90_ENABLED.");
 #endif
 }

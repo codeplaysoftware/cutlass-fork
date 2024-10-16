@@ -278,7 +278,8 @@ public:
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Conditional guards to enable partial specialization for packed integers
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 720) && ((__CUDACC_VER_MAJOR__ > 10) || ((__CUDACC_VER_MAJOR__ >= 10) && (__CUDACC_VER_MINOR__ >= 2)))
+#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 720) && ((__CUDACC_VER_MAJOR__ > 10) || ((__CUDACC_VER_MAJOR__ >= 10) && (__CUDACC_VER_MINOR__ >= 2)))) || \
+    (defined(__SYCL_CUDA_ARCH__) && (__SYCL_CUDA_ARCH__ >= 720))
 
 /// Applies a linear combination operator to an array of elements then clamps the output before
 /// converting to the output element type.

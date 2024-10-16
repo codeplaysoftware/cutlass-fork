@@ -36,7 +36,9 @@
 #include <cute/arch/mma.hpp>
 
 // Config
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900) && defined(__CUDA_ARCH_FEAT_SM90_ALL))
+#if ((defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)) || \
+     (defined(__SYCL_CUDA_ARCH__) && (__SYCL_CUDA_ARCH__ >= 900))) && \
+    defined(__CUDA_ARCH_FEAT_SM90_ALL)
 #    define CUTE_ARCH_MMA_SM90A_ENABLED
 #endif
 

@@ -45,6 +45,11 @@
 
 #include "cutlass/util/reference/device/kernel/gemm.h"
 
+#if defined(CUTLASS_ENABLE_SYCL)
+#include <syclcompat/syclcompat.hpp>
+namespace sc = syclcompat;
+#endif
+
 namespace cutlass {
 namespace reference {
 namespace device {
@@ -99,6 +104,25 @@ void compute_gemm(
   );
 
   // Launch a GEMM kernel
+  #if defined(CUTLASS_ENABLE_SYCL)
+  sc::launch<
+    kernel::Gemm<
+    TensorRef<ElementA, LayoutA>,
+    TensorRef<ElementB, LayoutB>,
+    TensorRef<ElementC, LayoutC>,
+    ScalarType,
+    AccumulatorType,
+    OutputTile,
+    InnerProductOp,
+    ConvertOp
+  >>(sc::dim3(grid.x, grid.y, grid.z), 
+                    sc::dim3(block.x, block.y, block.z),
+                    problem_size,
+                    alpha, tensor_a,
+                    tensor_b, beta,
+                    tensor_c, tensor_d,
+                    initial_accum);
+  #else
   kernel::Gemm<
     TensorRef<ElementA, LayoutA>,
     TensorRef<ElementB, LayoutB>,
@@ -118,6 +142,7 @@ void compute_gemm(
     tensor_d,
     initial_accum
   );
+  #endif
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -334,6 +359,28 @@ void BatchedGemm(
   );
 
   // Launch a GEMM kernel
+  #if defined(CUTLASS_ENABLE_SYCL)
+  sc::launch<
+    kernel::BatchedGemm<
+    TensorRefCollectionA,
+    TensorRefCollectionB,
+    TensorRefCollectionC,
+    ScalarType,
+    AccumulatorType,
+    OutputTile,
+    InnerProductOp,
+    ConvertOp
+  >>(sc::dim3(grid.x, grid.y, grid.z),
+                      sc::dim3(block.x, block.y, block.z),
+                      problem_size,
+                      alpha,
+                      tensor_a,
+                      tensor_b,
+                      beta,
+                      tensor_c,
+                      initial_accum
+                    );
+  #else
   kernel::BatchedGemm<
     TensorRefCollectionA,
     TensorRefCollectionB,
@@ -352,6 +399,7 @@ void BatchedGemm(
     tensor_c,
     initial_accum
   );
+  #endif
 }
 
 /// Computes a general matrix product among matrices (tensors of rank=2) pointed to by TensorRef

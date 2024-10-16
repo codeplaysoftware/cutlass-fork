@@ -136,15 +136,15 @@ public:
   CUTLASS_DEVICE explicit StaticPersistentTileScheduler(Params const& params_) : scheduler_params(params_) {
     // MSVC requires protecting use of CUDA-specific nonstandard syntax,
     // like blockIdx and gridDim, with __CUDA_ARCH__.
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__SYCL_CUDA_ARCH__)
     if (params_.raster_order_ == RasterOrder::AlongN) {
-      current_work_linear_idx_ = uint64_t(blockIdx.x) + uint64_t(blockIdx.y) * uint64_t(gridDim.x);
+      current_work_linear_idx_ = uint64_t(BlockIdxX()) + uint64_t(BlockIdxY()) * uint64_t(GridDimX());
     }
     else {
-      current_work_linear_idx_ = uint64_t(blockIdx.x) * uint64_t(gridDim.y) + uint64_t(blockIdx.y);
+      current_work_linear_idx_ = uint64_t(BlockIdxX()) * uint64_t(GridDimY()) + uint64_t(BlockIdxY());
     }
 
-    total_grid_size_ = uint64_t(gridDim.x) * uint64_t(gridDim.y) * uint64_t(gridDim.z);
+    total_grid_size_ = uint64_t(GridDimX()) * uint64_t(GridDimY()) * uint64_t(GridDimZ());
 #else
     CUTLASS_ASSERT(false && "This line should never be reached");
 #endif

@@ -36,7 +36,8 @@
 
 #include <cutlass/arch/memory_sm75.h>
 #include <cute/arch/cluster_sm90.hpp>
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900 && (__CUDACC_VER_MAJOR__ >= 12)
+#if (defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 900 && (__CUDACC_VER_MAJOR__ >= 12)) || \
+    (defined(__SYCL_CUDA_ARCH__) && (__SYCL_CUDA_ARCH__ >= 900) && defined(__PTX_VERSION__) && (__PTX_VERSION__ >= 80))
 #define CUDA_BARRIER_ENABLED 1
 #else
 #define CUDA_BARRIER_ENABLED 0

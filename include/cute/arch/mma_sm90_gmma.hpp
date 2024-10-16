@@ -33,7 +33,9 @@
 #include <cute/config.hpp>
 #include <cute/arch/mma.hpp>
 // Config
-#if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900) && defined(__CUDA_ARCH_FEAT_SM90_ALL))
+#if ((defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)) || \
+     (defined(__SYCL_CUDA_ARCH__) && (__SYCL_CUDA_ARCH__ >= 900))) && \
+    defined(__CUDA_ARCH_FEAT_SM90_ALL)
 #  define CUTE_ARCH_MMA_SM90A_ENABLED
 #endif
 
@@ -84,7 +86,7 @@ warpgroup_fence_operand(uint32_t& reg) {
   // MSVC emits a build error for 'asm volatile'
   // even if it only occurs in a __device__ function.
   // This prevents the error.
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__SYCL_CUDA_ARCH__)
   asm volatile("" : "+r"(reg) :: "memory");
 #endif
 }
@@ -92,7 +94,7 @@ warpgroup_fence_operand(uint32_t& reg) {
 CUTE_HOST_DEVICE
 void
 warpgroup_fence_operand(float& reg) {
-#if defined(__CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__SYCL_CUDA_ARCH__)
   asm volatile("" : "+f"(reg) :: "memory");
 #endif
 }
