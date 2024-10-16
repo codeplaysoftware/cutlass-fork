@@ -11,6 +11,8 @@ CUTLASS requires:
 - CMake 3.18+
 - host compiler supporting C++17 or greater (minimum g++ 7.5.0)
 - Python 3.6+
+- For the SYCL backend, an installation of the open source `DPC++` compiler, which 
+  can be found [here](https://github.com/intel/llvm)
 
 CUTLASS may be optionally compiled and linked with
 - cuBLAS
@@ -18,7 +20,7 @@ CUTLASS may be optionally compiled and linked with
 
 ## Initial build steps
 
-Construct a build directory and run CMake.
+Construct a build directory and run CMake if using the CUDA toolchain.
 ```bash
 $ export CUDACXX=${CUDA_INSTALL_PATH}/bin/nvcc
 
@@ -26,6 +28,48 @@ $ mkdir build && cd build
 
 $ cmake .. -DCUTLASS_NVCC_ARCHS=90a             # compiles for NVIDIA Hopper GPU architecture
 ```
+
+## Building and Running on the SYCL backend
+To build with the Intel open source `DPC++` compiler when using the SYCL backend
+```bash
+$ mkdir build && cd build
+
+$ cmake -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET=nvptx64-nvidia-cuda -DDPCPP_SYCL_ARCH=sm_80 .. # compiles for the NVIDIA Ampere GPU architecture
+
+# compiles for the Intel PVC Architecture
+cmake -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET=intel_gpu_pvc ..
+```
+A complete example can be as follows (running on the Intel Data Center Max 1100) - 
+
+```bash
+$ cmake -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET=intel_gpu_pvc ..
+
+$ make pvc_gemm
+
+$ ./examples/sycl/pvc/pvc_gemm
+
+Disposition: Passed
+Problem Size: 5120x4096x4096x1
+Cutlass GEMM Performance:     [225.773]TFlop/s  (0.7609)ms
+```
+More examples on the Intel GPU can be found in the [sycl example folder](../../examples/sycl/pvc/)
+
+A complete example when running on a A100, using the SYCL backend
+
+```bash
+$ cmake -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET=nvptx64-nvidia-cuda -DDPCPP_SYCL_ARCH=sm_80
+
+$ make 14_ampere_tf32_tensorop_gemm_cute
+
+$ ./examples/14_ampere_tf32_tensorop_gemm/14_ampere_tf32_tensorop_gemm_cute 
+
+  Disposition: Passed
+  Problem Size: 5120x4096x4096x1
+  Avg runtime: 1.5232 ms
+  GFLOPS: 112788
+```
+
+### CUTLASS quick building  tips
 
 If your goal is strictly to build only the CUTLASS Profiler and to minimize compilation time, we suggest
 executing the following CMake command in an empty `build/` directory.

@@ -41,6 +41,12 @@ and improves code composability and readability. More documentation specific to 
 
 In addition to GEMMs, CUTLASS implements high-performance convolution via the implicit GEMM algorithm. Implicit GEMM is the formulation of a convolution operation as a GEMM thereby taking advantage of CUTLASS's modular GEMM pipeline. This allows CUTLASS to build convolutions by reusing highly-optimized GEMM components.
 
+## CUTLASS with SYCL
+CUTLASS 3.0 API now also supports SYCL, and can run on Nvidia(upto the Ampere architecture) and Intel PVC GPUs using the SYCL backend using the Intel open source `DPC++` compiler.
+The support is currently limited to GEMMs only. See [Quick Start Guide](./media/docs/build/building_with_sycl_support.md) on how to build and run
+examples using the SYCL backend.
+
+To learn more about Intel SYCL compilers and SYCL, please see [Intel oneAPI](https://www.intel.com/content/www/us/en/developer/tools/oneapi/data-parallel-c-plus-plus.html)
 
 # What's New in CUTLASS 3.5
 

@@ -1,6 +1,3 @@
-
-[README](../../../README.md#documentation) > **CUTLASS 3: Building with Clang as Host Compiler**
-
 # Building with SYCL Support
 
 Cutlass 3 can be built with SYCL using the DPC++ compiler, enabling Cutlass
@@ -12,92 +9,64 @@ code for heterogeneous and offload processors to be written with modern
 ISO C++. It provides APIs and abstractions to find devices and manage
 resources for GPUs.
 
-## Limitations
+## Installing the DPC++ Compiler
+One can use the nightly version of the DPC++ compiler, of which the prebuilt packages can be 
+procured from [here](https://github.com/intel/llvm/releases), or build it from source as [described](https://github.com/intel/llvm/blob/sycl/sycl/doc/GetStartedGuide.md).
 
-Currently, it's only possible to build five examples in the Cute
-tutorial and a reduced number of Cute tests.
+If building from source for the CUDA backend, a minimum CUDA toolkit version of 12.3 is recommended.
+If using the pre-built nightlies, a nightly dated no older than 2024-08-02 is required.
 
-### Cute Tutorial Examples Supported
+## Building and Running on the SYCL backend
+To build with the Intel open source `DPC++` compiler when using the SYCL backend
+```bash
+$ mkdir build && cd build
 
-* `sgemm_1`, `sgemm_2` and `tiled_copy`: Generic examples that should run on any
-  SYCL-enabled device. Tested on Nvidia SM80 devices and Intel PVC
-  and Arc devices.
-* `sgemm_sm70`: Nvidia SM70 specific example.
-* `sgemm_sm80`: Nvidia SM80 specific example.
+# compiles for the NVIDIA Ampere GPU architecture
+$ cmake -DCMAKE_CXX_COMPILER=/path/to/dpcpp/clang++ -DCMAKE_C_COMPILER=/path/to/dpcpp/clang -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET=nvptx64-nvidia-cuda -DDPCPP_SYCL_ARCH=sm_80 ..
 
-## Software Prerequisites
-
-To build CUTLASS with SYCL support, you need the latest version of
-the DPC++ compiler. You can either use a recent
-[nightly build](https://github.com/intel/llvm/releases)
-(see the [Setup DPC++ Nightly Build](#setup-dpc-nightly-build) section)
-or build the compiler from source as described in the
-[oneAPI DPC++ guideline](https://github.com/intel/llvm/blob/sycl/sycl/doc/GetStartedGuide.md#build-dpc-toolchain-with-support-for-nvidia-cuda).
-
-If building for an Nvidia GPU, the CUDA Toolkit will be required
-(tested with version 12.4).
-
-CMake (at least version 3.18), Ninja, git, and Python
-(at least version 3.6) are also required.
-
-### Setup DPC++ Nightly Build
-
-To install the nightly build, download DPC++ from the
-[nightly build](https://github.com/intel/llvm/releases). The minimum version
-required is nightly 2024-07-19.
+# compiles for the Intel Xe Core Architecture
+$ cmake -DCMAKE_CXX_COMPILER=/path/to/dpcpp/clang++ -DCMAKE_C_COMPILER=/path/to/dpcpp/clang -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET=intel_gpu_pvc ..
+```
+A complete example can be as follows (running on the Intel Data Center Max 1100) - 
 
 ```bash
-$ export DPCPP_HOME=/opt/intel/dpcpp-nightly
-$ mkdir -p $DPCPP_HOME
-$ cd $DPCPP_HOME
-$ wget https://github.com/intel/llvm/releases/download/nightly-2024-07-19/sycl_linux.tar.gz
-$ tar -zxvf sycl_linux.tar.gz
-$ export PATH=$DPCPP_HOME/bin:$PATH
-$ export LD_LIBRARY_PATH=$DPCPP_HOME/lib:$LD_LIBRARY_PATH
-$ export C_INCLUDE_PATH=$DPCPP_HOME/include:$C_INCLUDE_PATH
-$ export CPLUS_INCLUDE_PATH=$DPCPP_HOME/include:$CPLUS_INCLUDE_PATH
-$ export CC=clang
-$ export CXX=clang++
+$ cmake -DCMAKE_CXX_COMPILER=/path/to/dpcpp/clang++ -DCMAKE_C_COMPILER=/path/to/dpcpp/clang -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET=intel_gpu_pvc ..
+
+$ make pvc_gemm
+
+$ ./examples/sycl/pvc/pvc_gemm
+
 ```
+More examples on the Intel GPU can be found in the [sycl example folder](../../examples/sycl/pvc/)
 
-# Running CMake
-
-## Required CMake options
-
-The SYCL build requires specifying the following CMake options and
-environmental variables. Replace `<path-to-clang>` and `<path-to-clang++>`
-with the path to your clang and clang++ executables. You may use `clang`
-and `clang++` directly if they are in your `PATH`.
+A complete example when running on a A100, using the SYCL backend
 
 ```bash
-$ export CC=<path-to-clang>/clang
-$ export CXX=<path-to-clang++>/clang++
+$ cmake -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -DCUTLASS_ENABLE_SYCL=ON -DDPCPP_SYCL_TARGET=nvptx64-nvidia-cuda -DDPCPP_SYCL_ARCH=sm_80
+
+$ make 14_ampere_tf32_tensorop_gemm_cute
+
+$ ./examples/14_ampere_tf32_tensorop_gemm/14_ampere_tf32_tensorop_gemm_cute 
+
 ```
 
-### CMake options for Nvidia devices
+## Supported CUTLASS and CUTE Examples
+Currently, not all CUTLASS and CUTE examples are supported with the SYCL backend.
+as of now, the following are supported - 
 
-* `DPCPP_SYCL_TARGET=nvptx64-nvidia-cuda` sets the triplet target for Nvidia GPUs.
-* `DPCPP_SYCL_ARCH=sm_80` sets the device architecture to SM_80.
+CUTE Examples <br>
+  * All the CUTE tutorials except `wgmma_sm90` is supported, of which
+    * `sgemm_1`, `sgemm_2`, and `tiled_copy` can run on any SYCL device
+    * `sgemm_sm80` and `sgemm_sm70` are Nvidia Ampere and Turing specific examples respectively.
 
-```bash
-$ cmake -G Ninja .. \
-    -DCUTLASS_ENABLE_SYCL=ON \
-    -DDPCPP_SYCL_TARGET=nvptx64-nvidia-cuda \
-    -DDPCPP_SYCL_ARCH=sm_80
-```
+CUTLASS Examples <br>
+  * Example 14
+  * We also provide various SYCL examples for the Intel Data Center Max range of GPUs
+  
+## SYCL Supported Architectures
+At the time of writing, the SYCL backend supports all Nvidia architectures till Ampere, and the 
+Intel Data Center Max series of GPUs is supported.
 
-Building Cutlass with SYCL support on Nvidia devices has been tested
-on an A100 device with `DPCPP_SYCL_ARCH=sm_80`.
-
-### CMake options for Intel devices
-
-* `DPCPP_SYCL_TARGET=intel_gpu_pvc` sets the triplet target for Intel PVC GPUs.
-
-```bash
-$ cmake -G Ninja .. \
-    -DCUTLASS_ENABLE_SYCL=ON \
-    -DDPCPP_SYCL_TARGET=intel_gpu_pvc
-```
 
 # References
 
