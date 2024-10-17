@@ -44,7 +44,7 @@ using namespace syclcompat::experimental;
 template <class MMA, uint32_t wg_tile_m, uint32_t wg_tile_n, uint32_t sg_tile_m,
           uint32_t sg_tile_n, uint32_t sg_tile_k, class TA, class TB, class TC>
 void gemm_device(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
-                 uint32_t k, void *) {
+                 uint32_t k) {
   using namespace cute;
 
   // Represent the full tensors
@@ -56,8 +56,8 @@ void gemm_device(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
                           make_layout(make_shape(m, n), make_stride(n, 1)));
 
   // Get the appropriate blocks for this thread block
-  auto cta_coord = make_coord(syclcompat::work_group_id::x(),
-                              syclcompat::work_group_id::y(), _); // (m,n,k)
+  auto cta_coord = make_coord(BlockIdxX(),
+                              BlockIdxY(), _); // (m,n,k)
 
   auto cta_tiler =
       make_shape(Int<wg_tile_m>{}, Int<wg_tile_n>{}, Int<sg_tile_k>{});
@@ -71,7 +71,7 @@ void gemm_device(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
           Shape<Int<cute::ceil_div(wg_tile_m, sg_tile_m)>,
                 Int<cute::ceil_div(wg_tile_n, sg_tile_n)>, _1>>{});
 
-  ThrMMA thrd_mma = mma.get_slice(syclcompat::local_id::x());
+  ThrMMA thrd_mma = mma.get_slice(ThreadIdxX());
 
   Tensor tgA = thrd_mma.partition_A(gA);
   Tensor fragment_A =
@@ -151,7 +151,6 @@ void gemm(int m, int n, int k, TA *A, TB *B, TC *C) {
   launch<gemm_device<MMA, wg_tile_m, wg_tile_n, sg_tile_m, sg_tile_n, sg_tile_k,
                      TA, TB, TC>>(
       launch_policy{dimGrid, dimBlock,
-                    local_mem_size{static_cast<std::size_t>(0)},
                     kernel_properties{sycl_exp::sub_group_size<SUBGROUP_SIZE>}},
       A, B, C, m, n, k);
 }

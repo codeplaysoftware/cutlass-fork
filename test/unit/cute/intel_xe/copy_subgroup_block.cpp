@@ -41,10 +41,8 @@ using namespace syclcompat::experimental;
 
 template <class TensorS, class TensorD, uint32_t wg_tile_m, uint32_t wg_tile_n,
           uint32_t sg_tile_m, uint32_t sg_tile_n>
-void copy_kernel_vectorized(TensorS S, TensorD D, uint32_t M, uint32_t N,
-                            void *) {
+void copy_kernel_vectorized(TensorS S, TensorD D, uint32_t M, uint32_t N) {
   using namespace cute;
-  using namespace cutlass;
 
   using Element = typename TensorS::value_type;
 
@@ -55,15 +53,15 @@ void copy_kernel_vectorized(TensorS S, TensorD D, uint32_t M, uint32_t N,
 
   // Slice work group.
   Tensor tile_wg_S =
-      tiled_tensor_S(make_coord(_, _), syclcompat::work_group_id::x(),
-                     syclcompat::work_group_id::y());
+      tiled_tensor_S(make_coord(_, _), BlockIdxX(),
+                     BlockIdxY());
   Tensor tile_wg_D =
-      tiled_tensor_D(make_coord(_, _), syclcompat::work_group_id::x(),
-                     syclcompat::work_group_id::y());
+      tiled_tensor_D(make_coord(_, _), BlockIdxX(),
+                     BlockIdxY());
 
   // Slice subgroup.
   auto SubgroupShape = Shape<Int<sg_tile_m>, Int<sg_tile_n>>{};
-  auto sg_id = get_sub_group_id();
+  auto sg_id = cutlass::get_sub_group_id();
   Tensor tile_sg_S = local_tile(tile_wg_S, SubgroupShape, sg_id);
   Tensor tile_sg_D = local_tile(tile_wg_D, SubgroupShape, sg_id);
 
@@ -90,7 +88,7 @@ void copy_kernel_vectorized(TensorS S, TensorD D, uint32_t M, uint32_t N,
 
   // Construct a Tensor corresponding to each thread's slice.
   auto thr_copy_load =
-      tiled_copy_load.get_thread_slice(get_sub_group_local_id());
+      tiled_copy_load.get_thread_slice(cutlass::get_sub_group_local_id());
   Tensor thr_tile_load_S = thr_copy_load.partition_S(tile_sg_S);
   Tensor thr_tile_load_D = thr_copy_load.partition_D(tile_sg_S);
 
@@ -117,9 +115,9 @@ void copy_kernel_vectorized(TensorS S, TensorD D, uint32_t M, uint32_t N,
 
   static constexpr auto sg_per_wg_x = wg_tile_n / sg_tile_n;
   const int m_coord =
-      BlockIdxX() * wg_tile_m + (get_sub_group_id() / sg_per_wg_x) * sg_tile_m;
+      BlockIdxX() * wg_tile_m + (cutlass::get_sub_group_id() / sg_per_wg_x) * sg_tile_m;
   const int n_coord =
-      BlockIdxY() * wg_tile_n + (get_sub_group_id() % sg_per_wg_x) * sg_tile_n;
+      BlockIdxY() * wg_tile_n + (cutlass::get_sub_group_id() % sg_per_wg_x) * sg_tile_n;
   const int l_coord = BlockIdxZ();
 
   // Copy from GMEM to RMEM and from RMEM to GMEM
@@ -135,7 +133,7 @@ void copy_kernel_vectorized(TensorS S, TensorD D, uint32_t M, uint32_t N,
       make_tiled_copy(Atom_store{}.with(&*D.data(), N, M, N),
                       Layout<Shape<_1, _16>, Stride<_0, _1>>{}, VecLayout);
   auto thr_copy_store =
-      tiled_copy_store.get_thread_slice(syclcompat::local_id::x());
+      tiled_copy_store.get_thread_slice(ThreadIdxX());
 
   Tensor thr_tile_store_D = thr_copy_store.partition_D(tile_sg_D);
 
@@ -178,27 +176,24 @@ bool copy(uint32_t M, uint32_t N) {
   //
   // Allocate and initialize
   //
-  std::vector<dtype> host_src(size(tensor_shape));
-  std::vector<dtype> host_output(size(tensor_shape));
-
-  dtype *device_src = syclcompat::malloc<dtype>(size(tensor_shape));
-  dtype *device_output = syclcompat::malloc<dtype>(size(tensor_shape));
+  cutlass::host_vector<dtype> host_src(size(tensor_shape));
+  cutlass::host_vector<dtype> host_output(size(tensor_shape));
 
   for (size_t i = 0; i < host_src.size(); ++i) {
     host_src[i] = static_cast<dtype>(i);
   }
 
-  syclcompat::memcpy<dtype>(device_src, host_src.data(), size(tensor_shape));
-  syclcompat::memcpy<dtype>(device_output, host_output.data(),
-                            size(tensor_shape));
+  cutlass::device_vector<dtype> device_src = host_src;
+  cutlass::device_vector<dtype> device_output = host_output;
+
 
   //
   // Make tensors
   //
 
-  Tensor tensor_S = make_tensor(make_gmem_ptr(device_src),
+  Tensor tensor_S = make_tensor(make_gmem_ptr(device_src.data()),
                                 make_layout(tensor_shape, make_stride(N, 1)));
-  Tensor tensor_D = make_tensor(make_gmem_ptr(device_output),
+  Tensor tensor_D = make_tensor(make_gmem_ptr(device_output.data()),
                                 make_layout(tensor_shape, make_stride(N, 1)));
 
   //
@@ -232,7 +227,6 @@ bool copy(uint32_t M, uint32_t N) {
   launch<copy_kernel_vectorized<decltype(tensor_S), decltype(tensor_D),
                                 wg_tile_m, wg_tile_n, sg_tile_m, sg_tile_n>>(
       launch_policy{gridDim, blockDim,
-                    local_mem_size{static_cast<std::size_t>(0)},
                     kernel_properties{sycl_exp::sub_group_size<SUBGROUP_SIZE>}},
       tensor_S, tensor_D, M, N);
 
@@ -242,8 +236,7 @@ bool copy(uint32_t M, uint32_t N) {
   // Verify
   //
 
-  syclcompat::memcpy<dtype>(host_output.data(), device_output,
-                            size(tensor_shape));
+  host_output = device_output;
 
   auto surface_pitch = N;
   for (int i = 0; i < sg_tile_m && i < M; i++) {

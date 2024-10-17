@@ -47,25 +47,20 @@ using namespace syclcompat::experimental;
 
 template <class atype, class btype, class ctype>
 void verify(uint32_t m, uint32_t n, uint32_t k, atype *A, btype *B, ctype *C,
-            ctype *D, bool row_a, bool row_b) {
-  std::vector<ctype> h_D(m * n);
-
-  syclcompat::memcpy<ctype>(h_D.data(), D, m * n);
-  syclcompat::wait();
-
+            bool row_a, bool row_b) {
   int cnt = 0;
   bool is_normal = true;
 
   for (int i = 0; i < m; i++) {
     for (int j = 0; j < n; j++) {
+      ctype expect = ctype(0);
       for (int z = 0; z < k; z++) {
         auto a = row_a ? A[i * k + z] : A[i + z * m];
         auto b = row_b ? B[z * n + j] : B[z + j * k];
-        C[i * n + j] += a * b;
+        expect += a * b;
       }
 
-      ctype val = h_D.data()[i * n + j];
-      ctype expect = C[i * n + j];
+      ctype val = C[i * n + j];
 
       if (isnormal(val) && isnormal(expect)) {
         auto error = std::abs((expect - val) / val);
@@ -82,36 +77,29 @@ void verify(uint32_t m, uint32_t n, uint32_t k, atype *A, btype *B, ctype *C,
   EXPECT_EQ(is_normal, true);
 }
 
-template <typename T> static void fill_matrix(std::vector<T> &M) {
+template <typename T> static void fill_matrix(cutlass::host_vector<T> &M) {
   std::random_device dev;
   std::mt19937 rng(dev());
   std::uniform_real_distribution<float> dist((T)0.0, (T)1.0);
-  std::generate(std::begin(M), std::end(M),
-                [&] { return static_cast<T>(dist(rng)); });
+  for (int i = 0; i < M.size(); i++) M[i] = static_cast<T>(dist(rng));
 }
 
 template <class kernel> void run(uint32_t m, uint32_t n, uint32_t k) {
 
-  using TA = kernel::TA;
-  using TB = kernel::TB;
-  using TC = kernel::TC;
+  using TA = typename kernel::TA;
+  using TB = typename kernel::TB;
+  using TC = typename kernel::TC;
 
-  std::vector<TA> h_A(m * k);
-  std::vector<TB> h_B(n * k);
-  std::vector<TC> h_C(m * n);
-  h_C.clear();
+  cutlass::host_vector<TA> h_A(m * k);
+  cutlass::host_vector<TB> h_B(n * k);
+  cutlass::host_vector<TC> h_C(m * n);
 
   fill_matrix(h_A);
   fill_matrix(h_B);
 
-  auto d_A = syclcompat::malloc<TA>(m * k);
-  auto d_B = syclcompat::malloc<TB>(k * n);
-  auto d_C = syclcompat::malloc<TC>(m * n);
-
-  syclcompat::memcpy<TA>(d_A, h_A.data(), m * k);
-  syclcompat::memcpy<TB>(d_B, h_B.data(), k * n);
-  syclcompat::memcpy<TC>(d_C, h_C.data(), m * n);
-  syclcompat::wait();
+  cutlass::device_vector<TA> d_A = h_A;
+  cutlass::device_vector<TB> d_B = h_B;
+  cutlass::device_vector<TC> d_C = h_C;
 
   auto dimBlock = syclcompat::dim3(
       ceil_div(kernel::wg_tile_m, kernel::sg_tile_m),
@@ -121,16 +109,11 @@ template <class kernel> void run(uint32_t m, uint32_t n, uint32_t k) {
 
   launch<kernel::func>(
       launch_policy{dimGrid, dimBlock,
-                    local_mem_size{static_cast<std::size_t>(0)},
                     kernel_properties{sycl_exp::sub_group_size<SUBGROUP_SIZE>}},
-      d_A, d_B, d_C, m, n, k);
+      d_A.data(), d_B.data(), d_C.data(), m, n, k);
 
   syclcompat::wait();
-
-  verify(m, n, k, h_A.data(), h_B.data(), h_C.data(), d_C,
+  h_C = d_C;
+  verify(m, n, k, h_A.data(), h_B.data(), h_C.data(),
          kernel::is_a_row_major, kernel::is_b_row_major);
-
-  syclcompat::free(d_A);
-  syclcompat::free(d_B);
-  syclcompat::free(d_C);
 }

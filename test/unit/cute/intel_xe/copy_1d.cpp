@@ -42,7 +42,7 @@ using namespace syclcompat::experimental;
 #define SUBGROUP_SIZE (16)
 
 template <class TensorS, class TensorD>
-void copy_kernel_vectorized(TensorS tile_S, TensorD tile_D, void *) {
+void copy_kernel_vectorized(TensorS tile_S, TensorD tile_D) {
   using namespace cute;
 
   using Element = typename TensorS::value_type;
@@ -99,12 +99,12 @@ void copy_kernel_vectorized(TensorS tile_S, TensorD tile_D, void *) {
 
   // Construct a Tensor corresponding to each thread's slice.
   auto thr_copy_load =
-      tiled_copy_load.get_thread_slice(syclcompat::local_id::x());
+      tiled_copy_load.get_thread_slice(ThreadIdxX());
   auto thr_copy_store =
-      tiled_copy_store.get_thread_slice(syclcompat::local_id::x());
+      tiled_copy_store.get_thread_slice(ThreadIdxX());
 
-  auto thr_copy_ldsm = tiled_ldsm.get_thread_slice(syclcompat::local_id::x());
-  auto thr_copy_stsm = tiled_stsm.get_thread_slice(syclcompat::local_id::x());
+  auto thr_copy_ldsm = tiled_ldsm.get_thread_slice(ThreadIdxX());
+  auto thr_copy_stsm = tiled_stsm.get_thread_slice(ThreadIdxX());
 
   Tensor thr_tile_load_S =
       thr_copy_load.partition_S(tile_S); // (CopyOp, CopyM, CopyN)
@@ -162,24 +162,22 @@ TEST(PVC_1d_copy, copy_double) {
     //
     // Allocate and initialize
     //
-    std::vector<Element> host_src(M * N);
-    std::vector<Element> host_output(M * N);
-
-    Element *device_src = syclcompat::malloc<Element>(M * N);
-    Element *device_output = syclcompat::malloc<Element>(M * N);
+    cutlass::host_vector<Element> host_src(M * N);
+    cutlass::host_vector<Element> host_output(M * N);
 
     for (size_t i = 0; i < host_src.size(); ++i) {
       host_src[i] = static_cast<Element>(i);
     }
 
-    syclcompat::memcpy<Element>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<Element>(device_output, host_output.data(), M * N);
+    cutlass::device_vector<Element> device_src = host_src;
+    cutlass::device_vector<Element> device_output(M * N);
+
 
     Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
+        make_tensor(make_gmem_ptr(device_src.data()),
                     make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
     Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
+        make_tensor(make_gmem_ptr(device_output.data()),
                     make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
 
     static constexpr auto subgroup_size = 16;
@@ -188,12 +186,11 @@ TEST(PVC_1d_copy, copy_double) {
     launch<copy_kernel_vectorized<decltype(S), decltype(D)>>(
         launch_policy{
             syclcompat::dim3(1), blockDim,
-            local_mem_size{static_cast<std::size_t>(0)},
             kernel_properties{sycl_exp::sub_group_size<SUBGROUP_SIZE>}},
         S, D);
 
     syclcompat::wait_and_throw();
-    syclcompat::memcpy<Element>(host_output.data(), device_output, M * N);
+    host_output = device_output;
     for (int i = 0; i < M * N; ++i) {
       // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
       EXPECT_EQ(host_output[i], host_src[i]);
@@ -207,24 +204,21 @@ TEST(PVC_1d_copy, copy_double) {
     //
     // Allocate and initialize
     //
-    std::vector<Element> host_src(M * N);
-    std::vector<Element> host_output(M * N);
-
-    Element *device_src = syclcompat::malloc<Element>(M * N);
-    Element *device_output = syclcompat::malloc<Element>(M * N);
+    cutlass::host_vector<Element> host_src(M * N);
+    cutlass::host_vector<Element> host_output(M * N);
 
     for (size_t i = 0; i < host_src.size(); ++i) {
       host_src[i] = static_cast<Element>(i);
     }
 
-    syclcompat::memcpy<Element>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<Element>(device_output, host_output.data(), M * N);
+    cutlass::device_vector<Element> device_src = host_src;
+    cutlass::device_vector<Element> device_output(M * N);
 
     Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
+        make_tensor(make_gmem_ptr(device_src.data()),
                     make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
     Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
+        make_tensor(make_gmem_ptr(device_output.data()),
                     make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
 
     static constexpr auto subgroup_size = 16;
@@ -235,14 +229,12 @@ TEST(PVC_1d_copy, copy_double) {
     launch<copy_kernel_vectorized<decltype(S), decltype(D)>>(
         launch_policy{
             syclcompat::dim3(1), blockDim,
-            local_mem_size{static_cast<std::size_t>(0)},
             kernel_properties{sycl_exp::sub_group_size<SUBGROUP_SIZE>}},
         S, D);
 
     syclcompat::wait_and_throw();
-    syclcompat::memcpy<Element>(host_output.data(), device_output, M * N);
+    host_output = device_output;
     for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
       EXPECT_EQ(host_output[i], host_src[i]);
     }
   }
@@ -254,24 +246,21 @@ TEST(PVC_1d_copy, copy_double) {
     //
     // Allocate and initialize
     //
-    std::vector<Element> host_src(M * N);
-    std::vector<Element> host_output(M * N);
-
-    Element *device_src = syclcompat::malloc<Element>(M * N);
-    Element *device_output = syclcompat::malloc<Element>(M * N);
+    cutlass::host_vector<Element> host_src(M * N);
+    cutlass::host_vector<Element> host_output(M * N);
 
     for (size_t i = 0; i < host_src.size(); ++i) {
       host_src[i] = static_cast<Element>(i);
     }
 
-    syclcompat::memcpy<Element>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<Element>(device_output, host_output.data(), M * N);
+    cutlass::device_vector<Element> device_src = host_src;
+    cutlass::device_vector<Element> device_output(M * N);
 
     Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
+        make_tensor(make_gmem_ptr(device_src.data()),
                     make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
     Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
+        make_tensor(make_gmem_ptr(device_output.data()),
                     make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
 
     static constexpr auto subgroup_size = 16;
@@ -282,14 +271,12 @@ TEST(PVC_1d_copy, copy_double) {
     launch<copy_kernel_vectorized<decltype(S), decltype(D)>>(
         launch_policy{
             syclcompat::dim3(1), blockDim,
-            local_mem_size{static_cast<std::size_t>(0)},
             kernel_properties{sycl_exp::sub_group_size<SUBGROUP_SIZE>}},
         S, D);
 
     syclcompat::wait_and_throw();
-    syclcompat::memcpy<Element>(host_output.data(), device_output, M * N);
+    host_output = device_output;
     for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
       EXPECT_EQ(host_output[i], host_src[i]);
     }
   }

@@ -37,6 +37,9 @@
 
 using namespace cute;
 using namespace cutlass;
+using namespace syclcompat::experimental;
+
+#define SUBGROUP_SIZE (16)
 
 template <class TensorS, class TensorD, class TiledLoad, class TiledStore, class CopyOp = void>
 void copy_kernel_vectorized(TensorS S, TensorD D, TiledLoad load,
@@ -46,7 +49,7 @@ void copy_kernel_vectorized(TensorS S, TensorD D, TiledLoad load,
   const int l_coord = BlockIdxZ();
 
   // ==========  load   ==========
-  auto thr_copy_load = load.get_thread_slice(syclcompat::local_id::x());
+  auto thr_copy_load = load.get_thread_slice(ThreadIdxX());
   auto thr_tile_load_D = thr_copy_load.partition_D(S);
   auto fragment = make_fragment_like(thr_tile_load_D);
   auto ld_tensor =
@@ -56,7 +59,7 @@ void copy_kernel_vectorized(TensorS S, TensorD D, TiledLoad load,
   copy(load, ld_tensor, fragment);
 
   // ==========  store   ==========
-  auto thr_copy_store = store.get_thread_slice(syclcompat::local_id::x());
+  auto thr_copy_store = store.get_thread_slice(ThreadIdxX());
   Tensor frag_view =
       make_tensor(static_cast<decltype(fragment) &&>(fragment).data(),
                   thr_copy_store.partition_S(D).shape());
@@ -65,7 +68,7 @@ void copy_kernel_vectorized(TensorS S, TensorD D, TiledLoad load,
                                         typename TiledStore::Shape_MN{});
   copy(store, frag_view, st_tensor);
 
-#if 1
+#if 0
   if (thread(1)) {
     print("fragment: ");
     print(fragment.layout());
@@ -85,1733 +88,264 @@ void copy_kernel_vectorized(TensorS S, TensorD D, TiledLoad load,
   }
 #endif
 }
+template<class dtype, class load, class store, uint32_t M, uint32_t N, bool trans = false>
+struct copy_op;
 
-TEST(PVC_2d_copy, load_store) {
-  {
-    print("XE_2D_U16x1x16_LD_N test: \n");
-    constexpr int M = 1;
-    constexpr int N = 16;
-    using dtype = uint16_t;
+template<class dtype, class load, class store, uint32_t M, uint32_t N>
+struct copy_op<dtype, load, store, M, N, false> {
+  void operator()() {
     //
     // Allocate and initialize
     //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
+    cutlass::host_vector<dtype> host_src(M * N);
+    cutlass::host_vector<dtype> host_output(M * N);
+    
     for (size_t i = 0; i < host_src.size(); ++i) {
       host_src[i] = static_cast<dtype>(i);
     }
 
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
+    cutlass::device_vector<dtype> device_src = host_src;
+    cutlass::device_vector<dtype> device_output = host_output;
 
     Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
+        make_tensor(make_gmem_ptr(device_src.data()),
                     make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
+    Tensor D = 
+        make_tensor(make_gmem_ptr(device_output.data()),
+                make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
 
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x1x16_LD_N>, uint16_t>{}.with(device_src, N, M,
+    auto tiled_load = 
+      make_tiled_copy(
+        Copy_Atom<Copy_Traits<load>, dtype>{}.with(device_src.data(), N, M,
                                                               N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_1, _1>, Stride<_1, _0>>{});
+        Layout<Shape<_1, Int<SUBGROUP_SIZE>>, Stride<_0, _1>>{},
+        Layout<Shape<decltype(size<0>(typename Copy_Traits<load>::Shape_MN{})), _1>, Stride<_1, _0>>{});
     auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x1x16_ST_N>, uint16_t>{}.with(device_output, N,
+        Copy_Atom<Copy_Traits<store>, dtype>{}.with(device_output.data(), N,
                                                               M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_1, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
+        Layout<Shape<_1, Int<SUBGROUP_SIZE>>, Stride<_0, _1>>{},
+        Layout<Shape<decltype(size<0>(typename Copy_Traits<store>::Shape_MN{})), _1>, Stride<_1, _0>>{});
     auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x1x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
+    //
+    // Launch the kernel
+    //
+    launch<copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
+                               decltype(tiled_store), load>>(
+        launch_policy{syclcompat::dim3(1), blockDim,
+                      kernel_properties{sycl_exp::sub_group_size<SUBGROUP_SIZE>}},
+        S, D, tiled_load, tiled_store);
 
     syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
+    host_output = device_output;
     for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
       EXPECT_EQ(host_output[i], host_src[i]);
     }
-    print("XE_2D_U16x1x16_LD_N test end \n\n");
   }
+};
 
-  {
-    print("XE_2D_U16x2x16_LD_N test: \n");
-    constexpr int M = 2;
-    constexpr int N = 16;
-    using dtype = uint16_t;
+template<class load, uint32_t M, uint32_t N> 
+struct copy_op<char, load, XE_2D_U8x2x32_ST_N, M, N, false> {
+  void operator()() {
     //
     // Allocate and initialize
     //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
+    using dtype = char;
+    cutlass::host_vector<dtype> host_src(M * N);
+    cutlass::host_vector<dtype> host_output(M * N);
+    
     for (size_t i = 0; i < host_src.size(); ++i) {
       host_src[i] = static_cast<dtype>(i);
     }
 
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
+    cutlass::device_vector<dtype> device_src = host_src;
+    cutlass::device_vector<dtype> device_output = host_output;
 
     Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
+        make_tensor(make_gmem_ptr(device_src.data()),
                     make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
     Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
+        make_tensor(make_gmem_ptr(device_output.data()),
                     make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
 
     auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x2x16_LD_N>, uint16_t>{}.with(device_src, N, M,
+        Copy_Atom<Copy_Traits<load>, dtype>{}.with(device_src.data(), N, M,
                                                               N),
+        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
+        make_layout(shape<1>(typename Copy_Atom<Copy_Traits<load>, dtype>::ValLayoutDst{})));
+    auto tiled_store = make_tiled_copy(
+        Copy_Atom<Copy_Traits<XE_2D_U8x2x32_ST_N>, dtype>{}.with(device_output.data(), N, M,
+                                                          N),
+        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
+        Layout<Shape<_2, _2>, Stride<_2, _1>>{});
+    auto blockDim = syclcompat::dim3(size(tiled_load));
+    //
+    // Launch the kernel
+    //
+    launch<copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
+                               decltype(tiled_store), load>>(
+        launch_policy{syclcompat::dim3(1), blockDim,
+                      kernel_properties{sycl_exp::sub_group_size<SUBGROUP_SIZE>}},
+        S, D, tiled_load, tiled_store);
+
+    syclcompat::wait_and_throw();
+    host_output = device_output;
+    for (int i = 0; i < M * N; ++i) {
+      EXPECT_EQ(host_output[i], host_src[i]);
+    }
+  }
+};
+
+template<class load, uint32_t M, uint32_t N>
+struct copy_op<uint16_t, load, XE_2D_U16x2x16_ST_N, M, N, false>{
+  void operator()() {
+    //
+    // Allocate and initialize
+    //
+    using dtype = uint16_t;
+    cutlass::host_vector<dtype> host_src(M * N);
+    cutlass::host_vector<dtype> host_output(M * N);
+    
+    for (size_t i = 0; i < host_src.size(); ++i) {
+      host_src[i] = static_cast<dtype>(i);
+    }
+
+    cutlass::device_vector<dtype> device_src = host_src;
+    cutlass::device_vector<dtype> device_output = host_output;
+
+    Tensor S =
+        make_tensor(make_gmem_ptr(device_src.data()),
+                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
+    Tensor D =
+        make_tensor(make_gmem_ptr(device_output.data()),
+                    make_layout(Shape<Int<M * 2>, Int<N / 2>>{}, Stride<Int<N / 2>, _1>{}));
+
+    auto tiled_load = make_tiled_copy(
+        Copy_Atom<Copy_Traits<load>, dtype>{}.with(device_src.data(), N, M,
+                                                              N),
+        Layout<Shape<_1, Int<SUBGROUP_SIZE>>, Stride<_0, _1>>{},
+        Layout<Shape<Int<M>, _2>, Stride<_1, _2>>{});
+    auto tiled_store = make_tiled_copy(
+        Copy_Atom<Copy_Traits<XE_2D_U16x2x16_ST_N>, uint16_t>{}.with(device_output.data(), N / 2,
+                                                              M * 2, N / 2),
         Layout<Shape<_1, _16>, Stride<_0, _1>>{},
         Layout<Shape<_2, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x2x16_ST_N>, uint16_t>{}.with(device_output, N,
-                                                              M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
     auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x2x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
+    //
+    // Launch the kernel
+    //
+    launch<copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
+                               decltype(tiled_store), load>>(
+        launch_policy{syclcompat::dim3(1), blockDim,
+                      kernel_properties{sycl_exp::sub_group_size<SUBGROUP_SIZE>}},
+        S, D, tiled_load, tiled_store);
 
     syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U16x2x16_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U16x4x16_LD_N test: \n");
-    constexpr int M = 4;
-    constexpr int N = 16;
-    using dtype = uint16_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x4x16_LD_N>, uint16_t>{}.with(device_src, N, M,
-                                                              N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_4, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x4x16_ST_N>, uint16_t>{}.with(device_output, N,
-                                                              M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_4, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x4x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U16x4x16_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U16x8x16_LD_N test: \n");
-    constexpr int M = 8;
-    constexpr int N = 16;
-    using dtype = uint16_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x8x16_LD_N>, uint16_t>{}.with(device_src, N, M,
-                                                              N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x8x16_ST_N>, uint16_t>{}.with(device_output, N,
-                                                              M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x8x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U16x8x16_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U16x16x16_LD_N test: \n");
-    constexpr int M = 16;
-    constexpr int N = 16;
-    using dtype = uint16_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x16x16_LD_N>, uint16_t>{}.with(device_src, N, M,
-                                                               N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_16, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x8x16_ST_N>, uint16_t>{}.with(device_output, N,
-                                                              M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x16x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U16x16x16_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U16x16x16_LD_N test: \n");
-    constexpr int M = 32;
-    constexpr int N = 16;
-    using dtype = uint16_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x16x16_LD_N>, uint16_t>{}.with(device_src, N, M,
-                                                               N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_16, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x8x16_ST_N>, uint16_t>{}.with(device_output, N,
-                                                              M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x16x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U16x16x16_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U16x1x32_LD_N test: \n");
-    constexpr int M = 1;
-    constexpr int N = 32;
-    using dtype = uint16_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D = make_tensor(
-        make_gmem_ptr(device_output),
-        make_layout(Shape<Int<2>, Int<16>>{}, Stride<Int<16>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x1x32_LD_N>, uint16_t>{}.with(device_src, N, M,
-                                                              N),
-        Layout<Shape<_1, _16>>{}, Layout<Shape<_1, _2>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x2x16_ST_N>, uint16_t>{}.with(device_output, 16,
-                                                              2, 16),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x1x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U16x1x32_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U16x2x32_LD_N test: \n");
-    constexpr int M = 2;
-    constexpr int N = 32;
-    using dtype = uint16_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D = make_tensor(
-        make_gmem_ptr(device_output),
-        make_layout(Shape<Int<4>, Int<16>>{}, Stride<Int<16>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x2x32_LD_N>, uint16_t>{}.with(device_src, N, M,
-                                                              N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _2>, Stride<_1, _2>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x4x16_ST_N>, uint16_t>{}.with(device_output, 16,
-                                                              4, 16),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_4, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x2x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    /* 0  1  2  3 ... 16 ... 31
-       32 33 34 35... 48 ... 64
-       thread 0
-       0 32 16 48
-       0   1 ...
-       32 33 ...
-       16 17 ...
-       48 49 ...
-    */
-    for (int i = 0; i < 4; ++i) {
-      for (int j = 0; j < 16; ++j) {
-        // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-        EXPECT_EQ(host_output[i * 16 + j],
-                  host_src[(i % 2) * 32 + j + (i / 2) * 16]);
+    host_output = device_output;
+    for (int i = 0; i < M * 2; ++i) {
+      for (int j = 0; j < N / 2; ++j) {
+        EXPECT_EQ(host_output[i * N / 2 + j],
+                  host_src[(i % M) * N + j + (i / M) * N / 2]);
       }
     }
-    print("XE_2D_U16x2x32_LD_N test end \n\n");
-  }
+  }  
+};
 
-  {
-    print("XE_2D_U16x4x32_LD_N test: \n");
-    constexpr int M = 4;
-    constexpr int N = 32;
-    using dtype = uint16_t;
+template<class load, class store, int32_t M, int32_t N>
+struct copy_op<uint32_t, load, store, M, N, true> {
+  void operator()() {
     //
     // Allocate and initialize
     //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D = make_tensor(
-        make_gmem_ptr(device_output),
-        make_layout(Shape<Int<8>, Int<16>>{}, Stride<Int<16>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x4x32_LD_N>, uint16_t>{}.with(device_src, N, M,
-                                                              N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_4, _2>, Stride<_1, _4>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x8x16_ST_N>, uint16_t>{}.with(device_output, 16,
-                                                              8, 16),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x4x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-
-    for (int i = 0; i < 8; ++i) {
-      for (int j = 0; j < 16; ++j) {
-        // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-        EXPECT_EQ(host_output[i * 16 + j],
-                  host_src[(i % 4) * 32 + j + (i / 4) * 16]);
-      }
-    }
-    print("XE_2D_U16x4x32_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U16x8x32_LD_N test: \n");
-    constexpr int M = 8;
-    constexpr int N = 32;
-    using dtype = uint16_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D = make_tensor(
-        make_gmem_ptr(device_output),
-        make_layout(Shape<Int<16>, Int<16>>{}, Stride<Int<16>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x8x32_LD_N>, uint16_t>{}.with(device_src, N, M,
-                                                              N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _2>, Stride<_1, _8>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x8x16_ST_N>, uint16_t>{}.with(device_output, 16,
-                                                              16, 16),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x8x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-
-    for (int i = 0; i < 16; ++i) {
-      for (int j = 0; j < 16; ++j) {
-        // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-        EXPECT_EQ(host_output[i * 16 + j],
-                  host_src[(i % 8) * 32 + j + (i / 8) * 16]);
-      }
-    }
-    print("XE_2D_U16x8x32_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U16x16x32_LD_N test: \n");
-    constexpr int M = 16;
-    constexpr int N = 32;
-    using dtype = uint16_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D = make_tensor(
-        make_gmem_ptr(device_output),
-        make_layout(Shape<Int<32>, Int<16>>{}, Stride<Int<16>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x16x32_LD_N>, uint16_t>{}.with(device_src, N, M,
-                                                               N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_16, _2>, Stride<_1, _16>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x8x16_ST_N>, uint16_t>{}.with(device_output, 16,
-                                                              32, 16),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x16x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-
-    for (int i = 0; i < 32; ++i) {
-      for (int j = 0; j < 16; ++j) {
-        // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-        EXPECT_EQ(host_output[i * 16 + j],
-                  host_src[(i % 16) * 32 + j + (i / 16) * 16]);
-      }
-    }
-    print("XE_2D_U16x16x32_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U16x32x32_LD_N test: \n");
-    constexpr int M = 32;
-    constexpr int N = 32;
-    using dtype = uint16_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D = make_tensor(
-        make_gmem_ptr(device_output),
-        make_layout(Shape<Int<64>, Int<16>>{}, Stride<Int<16>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x32x32_LD_N>, uint16_t>{}.with(device_src, N, M,
-                                                               N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_32, _2>, Stride<_1, _32>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x8x16_ST_N>, uint16_t>{}.with(device_output, 16,
-                                                              64, 16),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x32x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-
-    for (int i = 0; i < 64; ++i) {
-      for (int j = 0; j < 16; ++j) {
-        // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-        EXPECT_EQ(host_output[i * 16 + j],
-                  host_src[(i % 32) * 32 + j + (i / 32) * 16]);
-      }
-    }
-    print("XE_2D_U16x32x32_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U32x1x16_LD_N test: \n");
-    constexpr int M = 1;
-    constexpr int N = 16;
     using dtype = uint32_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
+    cutlass::host_vector<dtype> host_src(M * N);
+    cutlass::host_vector<dtype> host_output(M * N);
+    
     for (size_t i = 0; i < host_src.size(); ++i) {
       host_src[i] = static_cast<dtype>(i);
     }
 
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
+    cutlass::device_vector<dtype> device_src = host_src;
+    cutlass::device_vector<dtype> device_output = host_output;
 
     Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
+        make_tensor(make_gmem_ptr(device_src.data()),
                     make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
     Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x1x16_LD_N>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_1, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x1x16_ST_N>, dtype>{}.with(device_output, N, M,
-                                                           N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_1, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U32x1x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U32x1x16_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U32x2x16_LD_N test: \n");
-    constexpr int M = 2;
-    constexpr int N = 16;
-    using dtype = uint32_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x2x16_LD_N>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x2x16_ST_N>, dtype>{}.with(device_output, N, M,
-                                                           N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U32x2x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U32x2x16_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U32x4x16_LD_N test: \n");
-    constexpr int M = 4;
-    constexpr int N = 16;
-    using dtype = uint32_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x4x16_LD_N>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_4, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x4x16_ST_N>, dtype>{}.with(device_output, N, M,
-                                                           N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_4, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U32x4x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U32x4x16_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U32x8x16_LD_N test: \n");
-    constexpr int M = 8;
-    constexpr int N = 16;
-    using dtype = uint32_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x8x16_LD_N>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x8x16_ST_N>, dtype>{}.with(device_output, N, M,
-                                                           N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U32x8x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U32x8x16_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U32x16x16_LD_N test: \n");
-    constexpr int M = 16;
-    constexpr int N = 16;
-    using dtype = uint32_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x16x16_LD_N>, dtype>{}.with(device_src, N, M,
-                                                            N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_16, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x8x16_ST_N>, dtype>{}.with(device_output, N, M,
-                                                           N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U32x16x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U32x16x16_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U32x32x16_LD_N test: \n");
-    constexpr int M = 32;
-    constexpr int N = 16;
-    using dtype = uint32_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x32x16_LD_N>, dtype>{}.with(device_src, N, M,
-                                                            N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_32, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x8x16_ST_N>, dtype>{}.with(device_output, N, M,
-                                                           N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U32x32x16_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      //  EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U32x32x16_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U8x1x32_LD_N test: \n");
-    constexpr int M = 128;
-    constexpr int N = 32;
-    using dtype = char;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x1x32_LD_N>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_1, _16>>{}, Layout<Shape<_1, _2>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x2x32_ST_N>, dtype>{}.with(device_output, N, M,
-                                                          N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _2>, Stride<_2, _1>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U8x1x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U8x1x32_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U8x2x32_LD_N test: \n");
-    constexpr int M = 2;
-    constexpr int N = 32;
-    using dtype = uint8_t;
-
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    auto *device_src = syclcompat::malloc<dtype>(M * N);
-    auto *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x2x32_LD_N>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _2>, Stride<_1, _2>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x2x32_ST_N>, dtype>{}.with(device_output, N, M,
-                                                          N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _2>, Stride<_2, _1>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U8x2x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U8x2x32_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U8x4x32_LD_N test: \n");
-    constexpr int M = 4;
-    constexpr int N = 32;
-    using dtype = char;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x4x32_LD_N>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_4, _2>, Stride<_2, _1>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x2x32_ST_N>, dtype>{}.with(device_output, N, M,
-                                                          N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _2>, Stride<_2, _1>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U8x4x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U8x4x32_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U8x8x32_LD_N test: \n");
-    constexpr int M = 8;
-    constexpr int N = 32;
-    using dtype = char;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x8x32_LD_N>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _2>, Stride<_2, _1>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x2x32_ST_N>, dtype>{}.with(device_output, N, M,
-                                                          N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _2>, Stride<_2, _1>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U8x8x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U8x8x32_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U8x16x32_LD_N test: \n");
-    constexpr int M = 16;
-    constexpr int N = 32;
-    using dtype = char;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x16x32_LD_N>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_16, _2>, Stride<_2, _1>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x2x32_ST_N>, dtype>{}.with(device_output, N, M,
-                                                          N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _2>, Stride<_2, _1>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U8x16x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U8x16x32_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U8x32x32_LD_N test: \n");
-    constexpr int M = 32;
-    constexpr int N = 32;
-    using dtype = char;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x32x32_LD_N>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_32, _2>, Stride<_2, _1>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U8x2x32_ST_N>, dtype>{}.with(device_output, N, M,
-                                                          N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _2>, Stride<_2, _1>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U8x32x32_LD_N>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < M * N; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U8x32x32_LD_N test end \n\n");
-  }
-
-  {
-    print("XE_2D_U32x16x2_LD_T test: \n");
-    constexpr int M = 16;
-    constexpr int N = 2;
-    using dtype = uint32_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
+        make_tensor(make_gmem_ptr(device_output.data()),
                     make_layout(Shape<Int<N>, Int<M>>{}, Stride<Int<M>, _1>{}));
 
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x16x2_LD_T>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_16, _1>, Stride<_1, _0>>{},
-        Layout<Shape<_1, _2>, Stride<_0, _1>>{});
+    auto tiled_load = 
+      make_tiled_copy(
+        Copy_Atom<Copy_Traits<load>, dtype>{}.with(device_src.data(), N, M,
+                                                              N),
+        Layout<Shape<Int<SUBGROUP_SIZE>, _1>, Stride<_1, _0>>{},
+        Layout<Shape<_1, decltype(size<0>(typename Copy_Traits<load>::Shape_MN{}))>, Stride<_0, _1>>{});
     auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x2x16_ST_N>, dtype>{}.with(device_output, M, N,
+        Copy_Atom<Copy_Traits<store>, dtype>{}.with(device_output.data(), M, N,
                                                            M),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_2, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
+        Layout<Shape<_1, Int<SUBGROUP_SIZE>>, Stride<_0, _1>>{},
+        Layout<Shape<decltype(size<0>(typename Copy_Traits<store>::Shape_MN{})), _1>, Stride<_1, _0>>{});
     auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U32x16x2_LD_T>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
+    //
+    // Launch the kernel
+    //
+    launch<copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
+                               decltype(tiled_store), load>>(
+        launch_policy{syclcompat::dim3(1), blockDim,
+                      kernel_properties{sycl_exp::sub_group_size<SUBGROUP_SIZE>}},
+        S, D, tiled_load, tiled_store);
 
     syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
+    host_output = device_output;
     for (int i = 0; i < N; ++i) {
       for (int j = 0; j < M; ++j) {
-        // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
         EXPECT_EQ(host_output[i * M + j], host_src[j * N + i]);
       }
     }
-    print("XE_2D_U32x16x2_LD_T test end \n\n");
   }
+};
 
-  {
-    print("XE_2D_U32x16x4_LD_T test: \n");
-    constexpr int M = 16;
-    constexpr int N = 4;
-    using dtype = uint32_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<N>, Int<M>>{}, Stride<Int<M>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x16x4_LD_T>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_16, _1>, Stride<_1, _0>>{},
-        Layout<Shape<_1, _4>, Stride<_0, _1>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x4x16_ST_N>, dtype>{}.with(device_output, M, N,
-                                                           M),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_4, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U32x16x4_LD_T>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < N; ++i) {
-      for (int j = 0; j < M; ++j) {
-        // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-        EXPECT_EQ(host_output[i * M + j], host_src[j * N + i]);
-      }
-    }
-    print("XE_2D_U32x16x4_LD_T test end \n\n");
-  }
-
-  {
-    print("XE_2D_U32x16x8_LD_T test: \n");
-    constexpr int M = 16;
-    constexpr int N = 8;
-    using dtype = uint32_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<N>, Int<M>>{}, Stride<Int<M>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x16x8_LD_T>, dtype>{}.with(device_src, N, M, N),
-        Layout<Shape<_16, _1>, Stride<_1, _0>>{},
-        Layout<Shape<_1, _8>, Stride<_0, _1>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U32x8x16_ST_N>, dtype>{}.with(device_output, M, N,
-                                                           M),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U32x16x8_LD_T>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < N; ++i) {
-      for (int j = 0; j < M; ++j) {
-        // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-        EXPECT_EQ(host_output[i * M + j], host_src[j * N + i]);
-      }
-    }
-    print("XE_2D_U32x16x8_LD_T test end \n\n");
-  }
-
-  {
-    print("XE_2D_U16x16x16_LD_V test: \n");
-    constexpr int M = 16;
-    constexpr int N = 16;
-    using dtype = uint16_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>((dtype *)device_output, host_output.data(),
-                              M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x16x16_LD_V>, dtype>{}.with(device_src, N, M,
-                                                            N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_16, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x8x16_ST_N>, dtype>{}.with(device_output, N, M,
-                                                           N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x16x16_LD_V>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < 64; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U16x16x16_LD_V test end \n\n");
-  }
-
-  {
-    print("XE_2D_U16x32x16_LD_V test: \n");
-    constexpr int M = 32;
-    constexpr int N = 16;
-    using dtype = uint16_t;
-    //
-    // Allocate and initialize
-    //
-    std::vector<dtype> host_src(M * N);
-    std::vector<dtype> host_output(M * N);
-
-    dtype *device_src = syclcompat::malloc<dtype>(M * N);
-    dtype *device_output = syclcompat::malloc<dtype>(M * N);
-
-    for (size_t i = 0; i < host_src.size(); ++i) {
-      host_src[i] = static_cast<dtype>(i);
-    }
-
-    syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-    syclcompat::memcpy<dtype>((dtype *)device_output, host_output.data(),
-                              M * N);
-
-    Tensor S =
-        make_tensor(make_gmem_ptr(device_src),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-    Tensor D =
-        make_tensor(make_gmem_ptr(device_output),
-                    make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-    auto tiled_load = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x32x16_LD_V>, dtype>{}.with(device_src, N, M,
-                                                            N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_32, _1>, Stride<_1, _0>>{});
-    auto tiled_store = make_tiled_copy(
-        Copy_Atom<Copy_Traits<XE_2D_U16x8x16_ST_N>, dtype>{}.with(device_output, N, M,
-                                                           N),
-        Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-        Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-    static constexpr auto subgroup_size = 16;
-    auto blockDim = syclcompat::dim3(size(tiled_load));
-//
-// Launch the kernel
-//
-    syclcompat::experimental::launch<
-        copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                               decltype(tiled_store), XE_2D_U16x32x16_LD_V>,
-        subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-    syclcompat::wait_and_throw();
-    syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-    for (int i = 0; i < 64; ++i) {
-      // printf("%d  %d\n", int(h_in[i]), int(h_out[i]));
-      EXPECT_EQ(host_output[i], host_src[i]);
-    }
-    print("XE_2D_U16x32x16_LD_V test end \n\n");
-  }
+TEST(PVC_CuTe_Xe, block_2d_16bits_n) {
+  copy_op<uint16_t, XE_2D_U16x1x16_LD_N, XE_2D_U16x1x16_ST_N, 1, 16>{}();
+  copy_op<uint16_t, XE_2D_U16x4x16_LD_N, XE_2D_U16x4x16_ST_N, 4, 16>{}();
+  copy_op<uint16_t, XE_2D_U16x8x16_LD_N, XE_2D_U16x8x16_ST_N, 8, 16>{}();
+  copy_op<uint16_t, XE_2D_U16x16x16_LD_N, XE_2D_U16x8x16_ST_N, 16, 16>{}();
+  copy_op<uint16_t, XE_2D_U16x16x16_LD_N, XE_2D_U16x8x16_ST_N, 32, 16>{}();
 }
 
-TEST(PVC_2d_copy, load_store_XE_2D_U16x16x8_LD_T_And_XE_2D_U16x8x16_ST_N) {
-  constexpr int M = 8;
-  constexpr int N = 16;
-  using dtype = uint16_t;
+TEST(PVC_CuTe_Xe, block_2d_32bits_n) {
+  copy_op<uint32_t, XE_2D_U32x1x16_LD_N, XE_2D_U32x1x16_ST_N, 1, 16>{}();
+  copy_op<uint32_t, XE_2D_U32x2x16_LD_N, XE_2D_U32x2x16_ST_N, 2, 16>{}();
+  copy_op<uint32_t, XE_2D_U32x4x16_LD_N, XE_2D_U32x4x16_ST_N, 4, 16>{}();
+  copy_op<uint32_t, XE_2D_U32x8x16_LD_N, XE_2D_U32x8x16_ST_N, 8, 16>{}();
+  copy_op<uint32_t, XE_2D_U32x16x16_LD_N, XE_2D_U32x8x16_ST_N, 16, 16>{}();
+  copy_op<uint32_t, XE_2D_U32x32x16_LD_N, XE_2D_U32x8x16_ST_N, 32, 16>{}();
+}
 
-  std::vector<dtype> host_src(M * N);
-  std::vector<dtype> host_output(M * N);
+TEST(PVC_CuTe_Xe, block_2d_8bits_n) {
+  copy_op<char, XE_2D_U8x2x32_LD_N, XE_2D_U8x2x32_ST_N, 2, 32>{}();
+  copy_op<char, XE_2D_U8x4x32_LD_N, XE_2D_U8x2x32_ST_N, 4, 32>{}();
+  copy_op<char, XE_2D_U8x8x32_LD_N, XE_2D_U8x2x32_ST_N, 8, 32>{}();
+  copy_op<char, XE_2D_U8x16x32_LD_N, XE_2D_U8x2x32_ST_N, 16, 32>{}();
+  copy_op<char, XE_2D_U8x32x32_LD_N, XE_2D_U8x2x32_ST_N, 32, 32>{}();
+}
 
-  dtype *device_src = syclcompat::malloc<dtype>(M * N);
-  dtype *device_output = syclcompat::malloc<dtype>(M * N);
+TEST(PVC_CuTE_Xe, block_2d_16bits_n_v2) {
+  copy_op<uint16_t, XE_2D_U16x1x32_LD_N, XE_2D_U16x2x16_ST_N, 1, 32>{}();
+  copy_op<uint16_t, XE_2D_U16x2x32_LD_N, XE_2D_U16x2x16_ST_N, 2, 32>{}();
+  copy_op<uint16_t, XE_2D_U16x4x32_LD_N, XE_2D_U16x2x16_ST_N, 4, 32>{}();
+  copy_op<uint16_t, XE_2D_U16x8x32_LD_N, XE_2D_U16x2x16_ST_N, 8, 32>{}();
+  copy_op<uint16_t, XE_2D_U16x16x32_LD_N, XE_2D_U16x2x16_ST_N, 16, 32>{}();
+  copy_op<uint16_t, XE_2D_U16x32x32_LD_N, XE_2D_U16x2x16_ST_N, 32, 32>{}();
+}
 
-  for (size_t i = 0; i < host_src.size(); ++i) {
-    host_src[i] = static_cast<dtype>(i);
-  }
+TEST(PVC_CuTe_Xe, block_2d_16bits_vnni) {
+  copy_op<uint16_t, XE_2D_U16x16x16_LD_V, XE_2D_U16x8x16_ST_N, 16, 16>{}();
+  copy_op<uint16_t, XE_2D_U16x32x16_LD_V, XE_2D_U16x8x16_ST_N, 32, 16>{}();
+}
 
-  syclcompat::memcpy<dtype>(device_src, host_src.data(), M * N);
-  syclcompat::memcpy<dtype>(device_output, host_output.data(), M * N);
-
-  Tensor S =
-      make_tensor(make_gmem_ptr(device_src),
-                  make_layout(Shape<Int<M>, Int<N>>{}, Stride<_1, Int<M>>{}));
-  Tensor D =
-      make_tensor(make_gmem_ptr(device_output),
-                  make_layout(Shape<Int<M>, Int<N>>{}, Stride<Int<N>, _1>{}));
-
-  auto tiled_load =
-      make_tiled_copy(Copy_Atom<Copy_Traits<XE_2D_U16x16x8_LD_T>, dtype>{}.with(
-                          device_src, M, N, M),
-                      Layout<Shape<_16, _1>, Stride<_1, _0>>{},
-                      Layout<Shape<_1, _8>, Stride<_0, _1>>{});
-  auto tiled_store =
-      make_tiled_copy(Copy_Atom<Copy_Traits<XE_2D_U16x8x16_ST_N>, dtype>{}.with(
-                          device_output, N, M, N),
-                      Layout<Shape<_1, _16>, Stride<_0, _1>>{},
-                      Layout<Shape<_8, _1>, Stride<_1, _0>>{});
-
-  static constexpr auto subgroup_size = 16;
-  auto blockDim = syclcompat::dim3(size(tiled_load));
-
-  syclcompat::experimental::launch<
-      copy_kernel_vectorized<decltype(S), decltype(D), decltype(tiled_load),
-                             decltype(tiled_store)>,
-      subgroup_size>(1, blockDim, S, D, tiled_load, tiled_store);
-
-  syclcompat::wait_and_throw();
-  syclcompat::memcpy<dtype>(host_output.data(), device_output, M * N);
-  for (int i = 0; i < M; ++i) {
-    for (int j = 0; j < N; ++j) {
-      EXPECT_EQ(host_output[i * N + j], host_src[i + j * M]);
-    }
-  }
+TEST(PVC_CuTe_Xe, block_2d_32bits_transpose) {
+  copy_op<uint32_t, XE_2D_U32x16x2_LD_T, XE_2D_U32x2x16_ST_N, 16, 2, true>{}();
+  copy_op<uint32_t, XE_2D_U32x16x4_LD_T, XE_2D_U32x4x16_ST_N, 16, 4, true>{}();
+  copy_op<uint32_t, XE_2D_U32x16x8_LD_T, XE_2D_U32x8x16_ST_N, 16, 8, true>{}();
 }

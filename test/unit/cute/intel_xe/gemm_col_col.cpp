@@ -50,7 +50,7 @@ struct gemm_device_col_col {
   static constexpr uint32_t sg_tile_k = sg_k;
 
   static void func(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
-                   uint32_t k, void *) {
+                   uint32_t k) {
 
     // Represent the full tensors
     Tensor mA = make_tensor(make_gmem_ptr(A),
@@ -61,8 +61,8 @@ struct gemm_device_col_col {
                             make_layout(make_shape(m, n), make_stride(n, 1)));
 
     // Get the appropriate blocks for this thread block
-    auto cta_coord = make_coord(syclcompat::work_group_id::x(),
-                                syclcompat::work_group_id::y(), _);
+    auto cta_coord = make_coord(BlockIdxX(),
+                                BlockIdxY(), _);
 
     auto cta_tiler =
         make_shape(Int<wg_tile_m>{}, Int<wg_tile_n>{}, Int<sg_tile_k>{});
@@ -91,7 +91,7 @@ struct gemm_device_col_col {
         Layout<Shape<_1, Int<SUBGROUP_SIZE>>>{},
         make_layout(make_shape(get<0>(typename traits_store_C::Shape_MN{}),
                                get<1>(typename traits_store_C::Shape_MN{})/ Int<SUBGROUP_SIZE>{})));
-    auto thread_idx = syclcompat::local_id::x();
+    auto thread_idx = ThreadIdxX();
     auto mma = make_tiled_mma(
         MMA_Atom<traits_mma>{},
         Layout<Shape<Int<cute::ceil_div(wg_tile_m, sg_tile_m)>,
