@@ -64,6 +64,10 @@ else()
   add_subdirectory(core)
   add_subdirectory(layout)
   add_subdirectory(msvc_compilation)
+  
+  if(SYCL_INTEL_TARGET)
+    add_subdirectory(intel_xe)
+  endif()
 
   if(SYCL_NVIDIA_TARGET)
 
@@ -105,6 +109,9 @@ else()
     cutlass_test_unit_cute_layout
     cutlass_test_unit_cute_core
     cutlass_test_unit_cute_msvc_compilation
+    if(SYCL_INTEL_TARGET)
+    cutlass_test_unit_cute_intel_xe
+    endif()
     )
 
   add_custom_target(
@@ -114,6 +121,9 @@ else()
     test_unit_cute_core
     test_unit_cute_msvc_compilation
     #Intel Tests
+    if(SYCL_INTEL_TARGET)
+    test_unit_cute_intel_xe
+    endif()
     )
 
   endif()
