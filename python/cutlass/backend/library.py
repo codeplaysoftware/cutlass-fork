@@ -35,6 +35,7 @@ Common data types and string names/tags for them
 """
 
 import enum
+import os
 
 from cutlass_library import (
     ComplexTransform,
@@ -471,6 +472,9 @@ def api_version(arch, opclass, dtype):
     :return: API version to be used in code emission
     :rtype: ApiVersion
     """
+    if opclass == OpcodeClass.TensorOp and os.getenv("CUTLASS_USE_SYCL"):
+        return ApiVersion.v3x
+
     if (arch >= 90 and
         opclass == OpcodeClass.TensorOp and
         (dtype != DataType.f64)):

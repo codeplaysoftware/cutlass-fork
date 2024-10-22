@@ -160,7 +160,7 @@ class ArtifactManager:
             "--expt-relaxed-constexpr",
             "-Xcudafe --diag_suppress=esa_on_defaulted_function_ignored",
         ]
-        self._dpcpp_compile_options = ["-fsycl", "-std=c++17", "-DCUTLASS_ENABLE_SYCL"]
+        self._dpcpp_compile_options = ["-fsycl", "-std=c++17", "-DCUTLASS_ENABLE_SYCL", "-fsycl-rtc-mode", "-DSYCL_INTEL_TARGET", "-shared", "-fPIC"]
         self.nvcc()
         self.compiled_cache_device = {}
         self.compiled_cache_host = {}
@@ -259,8 +259,10 @@ class ArtifactManager:
                 if incl not in includes:
                     includes.append(incl)
 
-        includes_host = ["builtin_types.h",
-                         "device_launch_parameters.h", "stddef.h"] + includes
+        includes_host = ["stddef.h"] + includes
+        if not self._is_sycl():
+            includes_host.extend(["device_launch_parameters.h", "builtin_types.h"])
+
         for incl in includes:
             source_buffer_device += SubstituteTemplate(
                 IncludeTemplate,
@@ -442,13 +444,15 @@ class ArtifactManager:
 
             cutlass.initialize_cuda_context()
             arch = device_cc()
+            host_compile_options = CompilationOptions(
+                self._nvcc_compile_options, arch, include_paths, False)
         else:
             cutlass.initialize_sycl_context()
             arch = "spir64"
             print("Compiling for SYCL")
+            host_compile_options = CompilationOptions(
+                    ["-std=c++17", "-DCUTLASS_ENABLE_SYCL", "-DSYCL_INTEL_TARGET"], arch, include_paths, True)
 
-        host_compile_options = CompilationOptions(
-            self._nvcc_compile_options, arch, include_paths, self._is_sycl())
         if compile_options is None:
             compile_options = CompilationOptions(
                 self.default_compile_options, arch, include_paths, self._is_sycl())

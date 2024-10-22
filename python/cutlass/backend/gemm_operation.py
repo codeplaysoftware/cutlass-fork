@@ -33,6 +33,7 @@
 import copy
 import ctypes
 import enum
+import os
 
 from cuda import cuda, cudart
 from cutlass_library import SubstituteTemplate
@@ -1112,11 +1113,17 @@ class GemmRTUniversal3x(GemmRTUniversal):
 
 using Operator = ${operation_name}${operation_suffix};
 extern "C"
+#if defined(CUTLASS_ENABLE_SYCL)
+SYCL_EXTERNAL SYCL_EXT_ONEAPI_FUNCTION_PROPERTY(
+    (sycl::ext::oneapi::experimental::nd_range_kernel<
+        3>))
+void ${operation_name}(typename Operator::Params const params, char* smem) {
+#else
 __global__ __launch_bounds__(Operator::MaxThreadsPerBlock, Operator::MinBlocksPerMultiprocessor)
 void ${operation_name}(__grid_constant__ typename Operator::Params const params) {
   // Dynamic shared memory base pointer
   extern __shared__ char smem[];
-
+#endif
   // Declare pointer to dynamic shared memory.
   Operator op;
   op(params, smem);
@@ -1303,6 +1310,8 @@ using DeviceKernel = cutlass::gemm::device::GemmUniversalAdapter<${operation_nam
 
         if operation.tile_description.stages is None or operation.tile_description.stages == 0:
             stage_count_type = "cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>"
+        elif os.getenv("CUTLASS_USE_SYCL"):
+            stage_count_type = "cutlass::gemm::collective::StageCountAuto"
         else:
             stage_count_type = "_" + str(operation.tile_description.stages)
 
@@ -1335,7 +1344,7 @@ using DeviceKernel = cutlass::gemm::device::GemmUniversalAdapter<${operation_nam
             "element_accumulator": DataTypeTag[operation.accumulator_type()],
             "element_epilogue": DataTypeTag[operation.epilogue_functor.element_epilogue],
             "opcode_class": OpcodeClassTag[operation.tile_description.math_instruction.opcode_class],
-            "arch": "cutlass::arch::Sm%d" % operation.arch,
+            "arch": "cutlass::arch::IntelPVC",  # "cutlass::arch::Sm%d" % operation.arch,
             "threadblock_shape_m": str(operation.tile_description.threadblock_shape[0]),
             "threadblock_shape_n": str(operation.tile_description.threadblock_shape[1]),
             "threadblock_shape_k": str(operation.tile_description.threadblock_shape[2]),
