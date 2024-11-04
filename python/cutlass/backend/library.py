@@ -472,7 +472,7 @@ def api_version(arch, opclass, dtype):
     :return: API version to be used in code emission
     :rtype: ApiVersion
     """
-    if opclass == OpcodeClass.TensorOp and os.getenv("CUTLASS_USE_SYCL"):
+    if opclass == OpcodeClass.TensorOp and arch == 11:
         return ApiVersion.v3x
 
     if (arch >= 90 and

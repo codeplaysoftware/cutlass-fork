@@ -620,6 +620,7 @@ class Target(enum.Enum):
   library = enum_auto()
 #
 ArchitectureNames = {
+  11: 'pvc',
   50: 'maxwell',
   60: 'pascal',
   61: 'pascal',
@@ -632,6 +633,7 @@ ArchitectureNames = {
 
 #
 SharedMemPerCC = {
+  11: 128, # 128 KiB of SMEM on Intel PVC
   70:  96, #  96KB of SMEM
   72:  96, #  96KB of SMEM
   75:  64, #  64KB of SMEM

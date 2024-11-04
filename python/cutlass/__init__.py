@@ -174,8 +174,8 @@ def initialize_cuda_context():
 
 import dpctl
 
-this._sycl_device = None
-
+this._sycl_device: dpctl.SyclDevice = None
+this._use_sycl = False
 
 def initialize_sycl_context():
     if this._device_id is not None and this._sycl_device is not None:
@@ -195,6 +195,7 @@ def initialize_sycl_context():
 def device_id() -> int:
     if os.getenv("CUTLASS_USE_SYCL"):
         initialize_sycl_context()
+        this._use_sycl = True
     else:
         initialize_cuda_context()
     return this._device_id

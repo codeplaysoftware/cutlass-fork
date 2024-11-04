@@ -1307,11 +1307,10 @@ using DeviceKernel = cutlass::gemm::device::GemmUniversalAdapter<${operation_nam
 
     def emit(self, operation):
         # Support built-in epilogue functors or user-defined functions
-
-        if operation.tile_description.stages is None or operation.tile_description.stages == 0:
-            stage_count_type = "cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>"
-        elif os.getenv("CUTLASS_USE_SYCL"):
+        if operation.arch == 11:
             stage_count_type = "cutlass::gemm::collective::StageCountAuto"
+        elif operation.tile_description.stages is None or operation.tile_description.stages == 0:
+            stage_count_type = "cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>"
         else:
             stage_count_type = "_" + str(operation.tile_description.stages)
 
@@ -1330,6 +1329,7 @@ using DeviceKernel = cutlass::gemm::device::GemmUniversalAdapter<${operation_nam
         if operation.tile_description.tile_scheduler is not None:
             tschedule = operation.tile_description.tile_scheduler
 
+        arch = "cutlass::arch::IntelPVC" if operation.arch == 11 else f"cutlass::arch::Sm{operation.arch}"
         values = {
             "operation_name": operation.procedural_name(),
             "operation_suffix": self.operation_suffix,
@@ -1344,7 +1344,7 @@ using DeviceKernel = cutlass::gemm::device::GemmUniversalAdapter<${operation_nam
             "element_accumulator": DataTypeTag[operation.accumulator_type()],
             "element_epilogue": DataTypeTag[operation.epilogue_functor.element_epilogue],
             "opcode_class": OpcodeClassTag[operation.tile_description.math_instruction.opcode_class],
-            "arch": "cutlass::arch::IntelPVC",  # "cutlass::arch::Sm%d" % operation.arch,
+            "arch": arch,  # "cutlass::arch::Sm%d" % operation.arch,
             "threadblock_shape_m": str(operation.tile_description.threadblock_shape[0]),
             "threadblock_shape_n": str(operation.tile_description.threadblock_shape[1]),
             "threadblock_shape_k": str(operation.tile_description.threadblock_shape[2]),
