@@ -29,6 +29,7 @@
 
 
 set(CUTLASS_EXAMPLES_COMMON_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/common)
+set(CUTLASS_SYCL_EXAMPLE_COMMON_DIR ${CMAKE_CURRENT_SOURCE_DIR}/sycl)
 
 add_custom_target(cutlass_examples)
 add_custom_target(test_examples)
@@ -69,6 +70,11 @@ function(cutlass_example_add_executable NAME)
     )
 
   if (CUTLASS_ENABLE_SYCL)
+    target_include_directories(
+      ${NAME}
+      PRIVATE
+      ${CUTLASS_SYCL_EXAMPLE_COMMON_DIR}
+      )
     add_sycl_to_target(TARGET ${NAME})
   endif()
 

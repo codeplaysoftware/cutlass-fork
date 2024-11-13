@@ -102,7 +102,7 @@ else()
       #test_unit_cute_hopper
       test_unit_cute_msvc_compilation
       )
-  else()
+  elseif(SYCL_NVIDIA_TARGET)
   add_custom_target(
     cutlass_test_unit_cute
     DEPENDS
@@ -122,5 +122,19 @@ else()
     test_unit_cute_intel_xe
     )
 
+  else()
+  add_custom_target(
+    cutlass_test_unit_cute
+    DEPENDS
+    cutlass_test_unit_cute_layout
+    cutlass_test_unit_cute_core
+  )
+
+  add_custom_target(
+    test_unit_cute
+    DEPENDS
+    test_unit_cute_layout
+    test_unit_cute_core
+  )
   endif()
 endif()
