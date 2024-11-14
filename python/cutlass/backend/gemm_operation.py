@@ -33,7 +33,6 @@
 import copy
 import ctypes
 import enum
-import os
 
 from cuda import cuda, cudart
 from cutlass_library import SubstituteTemplate
@@ -1344,7 +1343,7 @@ using DeviceKernel = cutlass::gemm::device::GemmUniversalAdapter<${operation_nam
             "element_accumulator": DataTypeTag[operation.accumulator_type()],
             "element_epilogue": DataTypeTag[operation.epilogue_functor.element_epilogue],
             "opcode_class": OpcodeClassTag[operation.tile_description.math_instruction.opcode_class],
-            "arch": arch,  # "cutlass::arch::Sm%d" % operation.arch,
+            "arch": arch,
             "threadblock_shape_m": str(operation.tile_description.threadblock_shape[0]),
             "threadblock_shape_n": str(operation.tile_description.threadblock_shape[1]),
             "threadblock_shape_k": str(operation.tile_description.threadblock_shape[2]),

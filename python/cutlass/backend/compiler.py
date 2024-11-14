@@ -32,7 +32,6 @@
 
 import ctypes
 import json
-import os
 import pathlib
 import sqlite3
 import subprocess
@@ -160,7 +159,11 @@ class ArtifactManager:
             "--expt-relaxed-constexpr",
             "-Xcudafe --diag_suppress=esa_on_defaulted_function_ignored",
         ]
-        self._dpcpp_compile_options = ["-fsycl", "-std=c++17", "-DCUTLASS_ENABLE_SYCL", "-fsycl-rtc-mode", "-DSYCL_INTEL_TARGET", "-shared", "-fPIC"]
+        self._dpcpp_compile_options = ["-fsycl", "-std=c++17",
+                                       "-DCUTLASS_ENABLE_SYCL",
+                                       "-fsycl-rtc-mode",
+                                       "-DSYCL_INTEL_TARGET",
+                                       "-shared", "-fPIC"]
         self.nvcc()
         self.compiled_cache_device = {}
         self.compiled_cache_host = {}
@@ -334,7 +337,7 @@ class ArtifactManager:
             # Emit code to file
             tempfile.tempdir = "./"
             temp_cpp = tempfile.NamedTemporaryFile(
-                prefix="kernel_", suffix=".cpp", delete=False)
+                prefix="kernel_", suffix=".cpp", delete=True)
             temp_dump_dir = tempfile.TemporaryDirectory(
                 prefix="kernel_", suffix="_dpcpp")
             ignore_out = tempfile.NamedTemporaryFile(
@@ -343,10 +346,6 @@ class ArtifactManager:
                 file.write(source_buffer_device)
 
             # Compile with DPC++
-            print("Compile options: ", compilation_options.get_str())
-            print("Source file: ", temp_cpp.name)
-            print("Output file: ", ignore_out.name)
-            print("Temporary directory: ", temp_dump_dir.name)
             cmd_template = "clang++ ${options} ${srcfile} -o ${outfile} -fsycl-dump-device-code=${tmpdir}"
             values = {
                 "options": compilation_options.get_str(),
@@ -355,7 +354,6 @@ class ArtifactManager:
                 "tmpdir": temp_dump_dir.name
             }
             cmd = SubstituteTemplate(cmd_template, values)
-            print(cmd)
             compile_with_nvcc(cmd.split(" "), source_buffer_device,
                               "./cutlass_python_compilation_device_error.txt")
 
@@ -449,9 +447,9 @@ class ArtifactManager:
         else:
             cutlass.initialize_sycl_context()
             arch = "spir64"
-            print("Compiling for SYCL")
             host_compile_options = CompilationOptions(
-                    ["-std=c++17", "-DCUTLASS_ENABLE_SYCL", "-DSYCL_INTEL_TARGET"], arch, include_paths, True)
+                    ["-std=c++17", "-DCUTLASS_ENABLE_SYCL", "-DSYCL_INTEL_TARGET"],
+                    arch, include_paths, True)
 
         if compile_options is None:
             compile_options = CompilationOptions(

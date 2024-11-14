@@ -35,7 +35,6 @@ Common data types and string names/tags for them
 """
 
 import enum
-import os
 
 from cutlass_library import (
     ComplexTransform,
