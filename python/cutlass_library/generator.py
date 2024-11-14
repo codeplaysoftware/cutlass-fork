@@ -7060,7 +7060,7 @@ def GeneratePVC_TensorOp_16b_gemm(manifest, cuda_version):
 
       schedules = [[KernelScheduleType.ScheduleAuto, EpilogueScheduleType.ScheduleAuto]]
 
-      CreateGemmUniversal3xOperator(manifest, layouts, tile_descriptions, data_type, schedules, tile_schedulers=[TileSchedulerType.Default])
+      CreateGemmUniversal3xOperator(manifest, layouts, tile_descriptions, data_type, schedules, tile_schedulers=[TileSchedulerType.Persistent])
 
 def GeneratePVC(manifest, cuda_version):
     GeneratePVC_TensorOp_16b_gemm(manifest, cuda_version)
