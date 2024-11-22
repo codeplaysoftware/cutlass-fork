@@ -28,18 +28,6 @@
 
 
 cutlass_example_add_executable(
-  pvc_gemm
-  pvc_gemm.cpp
+  pvc_flash_attention
+  pvc_flash_attn.cpp
 )
-
-cutlass_example_add_executable(
-  pvc_gemm_with_epilogue_relu
-  pvc_gemm_with_epilogue_relu.cpp
-)
-
-cutlass_example_add_executable(
-  pvc_collective_builder
-  pvc_collective_builder.cpp
-)
-
-add_subdirectory(flash_attention_v2)
