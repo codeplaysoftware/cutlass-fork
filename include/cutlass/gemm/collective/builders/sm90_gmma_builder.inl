@@ -33,7 +33,7 @@
 #include "cutlass/gemm/collective/builders/sm90_common.inl"
 
 // SM90 Collective Builders should be used only starting CUDA 12.0
-#if (__CUDACC_VER_MAJOR__ >= 12)
+#if (__CUDACC_VER_MAJOR__ >= 12) || (SYCL_NVIDIA_TARGET)
 #define CUTLASS_SM90_COLLECTIVE_BUILDER_SUPPORTED
 #endif
 
@@ -961,7 +961,8 @@ static constexpr bool OnlyOneIsTuple = cute::is_tuple<ElementA>::value ^ cute::i
 static constexpr bool IsDifferentWidth = sizeof_bits<ExtractedElementA>::value != sizeof_bits<ExtractedElementB>::value;
 static constexpr bool IsMixedWidthInput = IsDifferentWidth || (IsDifferentWidth && OnlyOneIsTuple);
 
-#if ((__CUDACC_VER_MAJOR__ > 12) || ((__CUDACC_VER_MAJOR__ == 12) && (__CUDACC_VER_MINOR__ >= 1)))
+#if ((__CUDACC_VER_MAJOR__ > 12) || ((__CUDACC_VER_MAJOR__ == 12) && (__CUDACC_VER_MINOR__ >= 1))) || \
+    defined(SYCL_NVIDIA_TARGET)
   // Persistent schedules perform best for CUDA Toolkits with version >= 12.1
   // KernelTmaWarpSpecializedCooperative requires TileShape_M to be at least 128
   using KernelTmaWarpSpecializedScheduleSameInput = cute::conditional_t<size<0>(TileShape_MNK{}) == Int<64>{},

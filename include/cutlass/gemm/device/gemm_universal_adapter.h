@@ -356,15 +356,14 @@ public:
     Status launch_result{ Status::kSuccess };
     // Use extended launch API only for mainloops that use it
     if constexpr (GemmKernel::ArchTag::kMinComputeCapability >= 90) {
-#if !defined(CUTLASS_ENABLE_SYCL)
       constexpr bool is_static_1x1x1 = cute::is_static_v<typename GemmKernel::DispatchPolicy::ClusterShape> and
                                        cute::size(typename GemmKernel::DispatchPolicy::ClusterShape{}) == 1;
       dim3 cluster(cute::size<0>(typename GemmKernel::DispatchPolicy::ClusterShape{}),
                    cute::size<1>(typename GemmKernel::DispatchPolicy::ClusterShape{}),
                    cute::size<2>(typename GemmKernel::DispatchPolicy::ClusterShape{}));
       void* kernel_params[] = {&params};
-
       if constexpr (kEnableCudaHostAdapter) {
+#if !defined(CUTLASS_ENABLE_SYCL)
         //
         // Use the cuda host adapter
         //
@@ -387,21 +386,62 @@ public:
         else {
           return Status::kErrorInternal;
         }
+#endif
       }
       else {
         CUTLASS_ASSERT(cuda_adapter == nullptr);
         void const* kernel = (void const*) device_kernel<GemmKernel>;
         if constexpr (GemmKernel::ArchTag::kMinComputeCapability == 90) {
           if (is_static_1x1x1 && not launch_with_pdl) {
+            #if defined(CUTLASS_ENABLE_SYCL)
+              #if defined(SYCL_NVIDIA_TARGET)
+              const auto sycl_block = syclcompat::dim3(block.x, block.y, block.z);
+              const auto sycl_grid = syclcompat::dim3(grid.x, grid.y, grid.z);
+
+              using namespace syclcompat::experimental;
+              auto event = launch<device_kernel<GemmKernel>>(launch_policy{
+                sycl_grid, sycl_block, local_mem_size{static_cast<std::size_t>(smem_size)}},
+                params);
+                EventManager::getInstance().addEvent(event);
+            #endif
+            #else
             device_kernel<GemmKernel><<<grid, block, smem_size, stream>>>(params);
+            #endif
           }
           else {
+            #if defined(CUTLASS_ENABLE_SYCL)
+              #if defined(SYCL_NVIDIA_TARGET) && !defined(__INTEL_LLVM_COMPILER) // Disable cluster launch via icpx
+              using namespace sycl::ext::oneapi::experimental;
+              namespace sc = syclcompat;
+              if (launch_with_pdl) {
+                throw std::runtime_error("Programmatic Grid synchronization is not yet supported by SYCL");
+              }
+              properties launch_properties{
+                cuda::cluster_size(sycl::range<3>(cluster.z, cluster.y, cluster.x)),
+                work_group_static_size(smem_size)
+              };
+              auto queue = syclcompat::get_default_queue();
+              auto event = queue.submit([&](sycl::handler& cgh){
+                cgh.parallel_for(sycl::nd_range<3>(
+                                  {grid.z * block.z, grid.y * block.y, grid.x * block.x},
+                                  {block.z, block.y, block.x}
+                                ),
+                                launch_properties,
+                                [=](sycl::nd_item<3> it)[[intel::max_work_group_size(1, 1, GemmKernel::MaxThreadsPerBlock)]]{
+                    auto smem_buf = get_dynamic_work_group_memory<char>().get();
+                    [[clang::always_inline]]device_kernel<GemmKernel>(params, smem_buf);
+                });
+              });
+              EventManager::getInstance().addEvent(event);
+            #endif
+            #else
             launch_result = ClusterLauncher::launch(
               grid, cluster, block, smem_size, stream, kernel, kernel_params, launch_with_pdl);
+            #endif          
           }
         }
       }
-#endif
+
     }
     else {
       launch_result = Status::kSuccess;

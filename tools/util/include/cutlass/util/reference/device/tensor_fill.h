@@ -157,7 +157,7 @@ struct RandomGaussianFunc {
   CUTLASS_DEVICE
   RandomGaussianFunc(Params const &params): params(params) {
 
-    uint64_t gtid = threadIdx.x + blockIdx.x * blockDim.x;
+    uint64_t gtid = ThreadIdxX() + BlockIdxX() * BlockDimX();
 
     curand_init(params.seed, gtid, 0, &rng_state);
   }
@@ -244,7 +244,7 @@ struct RandomGaussianFunc<complex<Real>> {
   CUTLASS_DEVICE
   RandomGaussianFunc(Params const &params): params(params) {
 
-    uint64_t gtid = threadIdx.x + blockIdx.x * blockDim.x;
+    uint64_t gtid = ThreadIdxX() + BlockIdxX() * BlockDimX();
 
     curand_init(params.seed, gtid, 0, &rng_state);
   }
@@ -470,7 +470,7 @@ struct RandomUniformFunc {
   CUTLASS_DEVICE
   RandomUniformFunc(Params const &params): params(params) {
 
-    uint64_t gtid = threadIdx.x + blockIdx.x * blockDim.x;
+    uint64_t gtid = ThreadIdxX() + BlockIdxX() * BlockDimX();
 
     curand_init(params.seed, gtid, 0, &rng_state);
   }
@@ -572,7 +572,7 @@ struct RandomUniformFunc<complex<Real>> {
   CUTLASS_DEVICE
   RandomUniformFunc(Params const &params): params(params) {
 
-    uint64_t gtid = threadIdx.x + blockIdx.x * blockDim.x;
+    uint64_t gtid = ThreadIdxX() + BlockIdxX() * BlockDimX();
 
     curand_init(params.seed, gtid, 0, &rng_state);
   }
@@ -800,7 +800,7 @@ struct RandomSparseMetaFunc {
   CUTLASS_DEVICE
   RandomSparseMetaFunc(Params const &params): params(params) {
 
-    uint64_t gtid = threadIdx.x + blockIdx.x * blockDim.x;
+    uint64_t gtid = ThreadIdxX() + BlockIdxX() * BlockDimX();
 
     curand_init(params.seed, gtid, 0, &rng_state);
   }

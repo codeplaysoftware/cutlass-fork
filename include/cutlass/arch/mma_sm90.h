@@ -46,25 +46,31 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#if ((__CUDACC_VER_MAJOR__ > 11) || (__CUDACC_VER_MAJOR__ == 11 && __CUDACC_VER_MINOR__ >= 8))
+#if ((__CUDACC_VER_MAJOR__ > 11) || (__CUDACC_VER_MAJOR__ == 11 && __CUDACC_VER_MINOR__ >= 8)) || \
+    defined(SYCL_NVIDIA_TARGET)
   #define CUTLASS_ARCH_MMA_SM90_F64_MMA_SUPPORTED
   #if (!defined(CUTLASS_ARCH_MMA_SM90_F64_MMA_ENABLED))
-    #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+    #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)) || \
+        (defined(__SYCL_CUDA_ARCH__) && (__SYCL_CUDA_ARCH__ >= 900) && \
+         defined(__PTX_VERSION__) && (__PTX_VERSION__ >= 80))
       #define CUTLASS_ARCH_MMA_SM90_F64_MMA_ENABLED
     #endif
   #endif
 #endif
 
-#if (__CUDACC_VER_MAJOR__ >= 12)
+#if (__CUDACC_VER_MAJOR__ >= 12) || defined(SYCL_NVIDIA_TARGET)
   #define CUTLASS_ARCH_MMA_SM90_SUPPORTED
   #if (!defined(CUTLASS_ARCH_MMA_SM90_ENABLED))
-    #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
+    #if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900)) || \
+        (defined(__SYCL_CUDA_ARCH__) && (__SYCL_CUDA_ARCH__ >= 900) &&\
+         defined(__PTX_VERSION__) && (__PTX_VERSION__ >= 80))
       #define CUTLASS_ARCH_MMA_SM90_ENABLED
     #endif
   #endif
 #endif
 
-#if ((__CUDACC_VER_MAJOR__ > 12) || ((__CUDACC_VER_MAJOR__ == 12) && (__CUDACC_VER_MINOR__ >= 3)))
+#if ((__CUDACC_VER_MAJOR__ > 12) || ((__CUDACC_VER_MAJOR__ == 12) && (__CUDACC_VER_MINOR__ >= 3))) || \
+    defined(SYCL_NVIDIA_TARGET)
   #define CUTLASS_ARCH_MMA_MODIFIABLE_TMA_SM90_SUPPORTED
 #endif
 

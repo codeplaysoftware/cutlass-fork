@@ -78,8 +78,8 @@ struct TMA_LOAD_Unpack
 #if 0
       auto [c0,c1,c2,c3,c4] = append<5>(src_coord, 0);
       printf("THR (%d,%d,%d) BLK (%d,%d,%d) TMACRD (%d,%d,%d,%d,%d) SMEMADDR (%p)\n",
-            threadIdx.x, threadIdx.y, threadIdx.z,
-            blockIdx.x, blockIdx.y, blockIdx.z,
+            ThreadIdxX(), ThreadIdxY(), ThreadIdxZ(),
+            BlockIdxX(), BlockIdxY(), BlockIdxZ(),
             int32_t(c0), int32_t(c1), int32_t(c2), int32_t(c3), int32_t(c4), dst_ptr);
 #endif
       return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
@@ -314,8 +314,8 @@ struct TMA_STORE_Unpack
 #if 0
     auto [c0,c1,c2,c3,c4] = append<5>(dst_coord, 0);
     printf("THR (%d,%d,%d) BLK (%d,%d,%d) TMACRD (%d,%d,%d,%d,%d) SMEMADDR (%p)\n",
-           threadIdx.x, threadIdx.y, threadIdx.z,
-           blockIdx.x, blockIdx.y, blockIdx.z,
+           ThreadIdxX(), ThreadIdxY(), ThreadIdxZ(),
+           BlockDimX(), BlockDimY(), BlockDimZ(),
            int32_t(c0), int32_t(c1), int32_t(c2), int32_t(c3), int32_t(c4), src_ptr);
 #endif
     return detail::explode_tuple(detail::CallCOPY<SM90_TMA_STORE>{},
@@ -375,8 +375,8 @@ struct Copy_Traits<SM90_TMA_STORE, NumBitsPerTMA, AuxParams_>
 #if 0
     auto [c0,c1,c2,c3,c4] = append<5>(dst_coord, 0);
     printf("THR (%d,%d,%d) BLK (%d,%d,%d) TMACRD (%d,%d,%d,%d,%d) SMEMADDR (%p)\n",
-           threadIdx.x, threadIdx.y, threadIdx.z,
-           blockIdx.x, blockIdx.y, blockIdx.z,
+           ThreadIdxX(), ThreadIdxY(), ThreadIdxZ(),
+           BlockIdxX(), BlockIdxY(), BlockIdxZ(),
            int32_t(c0), int32_t(c1), int32_t(c2), int32_t(c3), int32_t(c4), src_ptr);
 #endif
     return detail::explode_tuple(detail::CallCOPY<SM90_TMA_STORE>{},
@@ -457,8 +457,8 @@ struct Copy_Traits<SM90_TMA_REDUCE_ADD, NumBitsPerTMA, AuxParams_>
 #if 0
     auto [c0,c1,c2,c3,c4] = append<5>(dst_coord, 0);
     printf("THR (%d,%d,%d) BLK (%d,%d,%d) TMACRD (%d,%d,%d,%d,%d) SMEMADDR (%p)\n",
-           threadIdx.x, threadIdx.y, threadIdx.z,
-           blockIdx.x, blockIdx.y, blockIdx.z,
+           ThreadIdxX(), ThreadIdxY(), ThreadIdxZ(),
+           BlockIdxX(), BlockIdxY(), BlockIdxZ(),
            int32_t(c0), int32_t(c1), int32_t(c2), int32_t(c3), int32_t(c4), src_ptr);
 #endif
 
@@ -974,7 +974,8 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
     // TMA general info
     //
 
-  #if (__CUDACC_VER_MAJOR__ >= 12) && !defined(__CUDACC_RTC__)
+  #if ((__CUDACC_VER_MAJOR__ >= 12) && !defined(__CUDACC_RTC__)) || \
+      defined(SYCL_NVIDIA_TARGET)
 
     CUtensorMapDataType     tma_format      = TMA::to_CUtensorMapDataType<TmaInternalType>();
     CUtensorMapInterleave   tma_interleave  = CU_TENSOR_MAP_INTERLEAVE_NONE;
@@ -984,7 +985,7 @@ make_tma_copy_desc(Tensor<GEngine,GLayout> const& gtensor,         // The origin
     // TMA smem swizzle type
     CUtensorMapSwizzle smem_swizzle = TMA::to_CUtensorMapSwizzle(get_tma_swizzle_bits(swizzle));
     CUresult result = cuTensorMapEncodeTiled(
-        &tma_desc,
+        reinterpret_cast<CUtensorMap*>(&tma_desc),
         tma_format,
         tma_dim,
         gmem_address,

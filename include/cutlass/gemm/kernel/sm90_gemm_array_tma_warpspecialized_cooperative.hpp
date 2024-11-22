@@ -607,7 +607,7 @@ public:
 
       // Epilogue Producer Warp
       else if (producer_warp_role == ProducerWarpRole::Epilogue && collective_epilogue.is_producer_load_needed()) {
-        int32_t const sm_idx = blockIdx.x + (blockIdx.y * gridDim.x);
+        int32_t const sm_idx = BlockIdxX() + (BlockIdxY() * GridDimX());
         int32_t const sm_count = params.hw_info.sm_count;
 
         auto epi_load_tensormap = get<0>(collective_epilogue.load_init(params.epilogue, sm_count, sm_idx));
@@ -624,7 +624,7 @@ public:
           );
 
           // Converge before issuing tensormap fence release since fence is aligned
-          __syncwarp();
+          syncwarp();
           collective_epilogue.tensormaps_cp_fence_release<IsEpiLoad>(shared_storage.tensormaps.epilogue, epi_load_tensormap, lane_predicate);
         }
 
@@ -684,7 +684,7 @@ public:
             );
 
             // Converge before issuing tensormap fence release since fence is aligned
-            __syncwarp();
+            syncwarp();
             collective_epilogue.tensormaps_cp_fence_release<IsEpiLoad>(shared_storage.tensormaps.epilogue, epi_load_tensormap, lane_predicate);
           }
 
@@ -702,7 +702,7 @@ public:
     else if (warp_group_role == WarpGroupRole::Consumer0 || warp_group_role == WarpGroupRole::Consumer1) {
       cutlass::arch::warpgroup_reg_alloc<MmaRegisterRequirement>();
 
-      int32_t const sm_idx = blockIdx.x + (blockIdx.y * gridDim.x);
+      int32_t const sm_idx = BlockIdxX() + (BlockIdxY() * GridDimX());
       int32_t const sm_count = params.hw_info.sm_count;
       // Do we potentially issue tail arrives for TMA stores, if epilogue load is waiting for it
       bool do_store_tail = false;
@@ -721,7 +721,7 @@ public:
         );
 
         // Converge before issuing tensormap fence release since fence is aligned
-        __syncwarp();
+        syncwarp();
         collective_epilogue.tensormaps_cp_fence_release<IsEpiLoad>(shared_storage.tensormaps.epilogue, epi_store_tensormap, lane_predicate);
       }
 
@@ -812,7 +812,7 @@ public:
           );
 
           // Converge before issuing tensormap fence release since fence is aligned
-          __syncwarp();
+          syncwarp();
           collective_epilogue.tensormaps_cp_fence_release<IsEpiLoad>(shared_storage.tensormaps.epilogue, epi_store_tensormap, lane_predicate);
         }
 

@@ -76,11 +76,19 @@
 #include "cutlass/util/tensor_view_io.h"
 #include "cutlass/util/reference/device/gemm.h"
 #include "cutlass/util/reference/device/tensor_compare.h"
+#if defined(SYCL_NVIDIA_TARGET)
+#include "cutlass/util/reference/device/sycl_tensor_fill.h"
+#else
 #include "cutlass/util/reference/device/tensor_fill.h"
+#endif
 
 #include "helper.h"
 
 using namespace cute;
+
+#if defined(SYCL_NVIDIA_TARGET)
+using namespace cutlass;
+#endif
 
 #if defined(CUTLASS_ARCH_MMA_SM90_SUPPORTED)
 
@@ -379,7 +387,11 @@ bool verify(const Options &options) {
     ref_D);
 
   // Wait for kernel to finish
-  CUDA_CHECK(cudaDeviceSynchronize());
+  #if defined(SYCL_NVIDIA_TARGET)
+    syclcompat::wait_and_throw();
+  #else
+    CUDA_CHECK(cudaDeviceSynchronize());
+  #endif
 
   // Check if output from CUTLASS kernel and reference kernel are equal or not
   bool passed = cutlass::reference::device::BlockCompareEqual(block_ref_D.get(), block_D.get(), block_D.size());
@@ -427,10 +439,10 @@ int run(Options &options)
   // Run profiling loop
   if (options.iterations > 0)
   {
+    CUTLASS_CHECK(gemm.initialize(arguments, workspace.get()));
     GpuTimer timer;
     timer.start();
     for (int iter = 0; iter < options.iterations; ++iter) {
-      CUTLASS_CHECK(gemm.initialize(arguments, workspace.get()));
       CUTLASS_CHECK(gemm.run());
     }
     timer.stop();
@@ -466,6 +478,7 @@ int main(int argc, char const **args) {
 
   // CUTLASS must be compiled with CUDA 12.0 Toolkit to run this example
   // and must have compute capability at least 90.
+  #if !defined(SYCL_NVIDIA_TARGET)
   if (__CUDACC_VER_MAJOR__ < 12) {
     std::cerr << "This example requires CUDA 12 or newer.\n";
     // Returning zero so this test passes on older Toolkits. Its actions are no-op.
@@ -483,6 +496,7 @@ int main(int argc, char const **args) {
       << "later (compute capability 90 or greater).\n";
     return 0;
   }
+  #endif
   //
   // Parse options
   //

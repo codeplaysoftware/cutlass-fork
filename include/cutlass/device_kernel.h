@@ -109,7 +109,9 @@ void Kernel2(typename Operator::Params params) {
 /// Generic CUTLASS kernel template.
 template <typename Operator>
 #if defined(CUTLASS_ENABLE_SYCL)
-void device_kernel(typename Operator::Params const params, sycl::local_ptr<char> smem) {
+// Temporary change till another definition of device_kernel is added.
+__attribute__((always_inline)) inline void 
+device_kernel(const typename Operator::Params&  params, sycl::local_ptr<char> smem) {
 #else
 CUTLASS_GLOBAL
 #ifdef __CUDACC__

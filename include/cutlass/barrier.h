@@ -97,7 +97,7 @@ protected:
   {
     int state = 0;
 
-#if (__CUDA_ARCH__ >= 700)
+#if (__CUDA_ARCH__ >= 700) || (__SYCL_CUDA_ARCH__ >= 700)
     /// SM70 and newer use memory consistency qualifiers
 
     // Acquire pattern using acquire modifier
