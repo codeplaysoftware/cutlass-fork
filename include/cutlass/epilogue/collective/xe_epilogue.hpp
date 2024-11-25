@@ -368,7 +368,7 @@ public:
         auto acc_frag_mn = acc_frag(_, epi_m, epi_n);
 
         CUTLASS_PRAGMA_UNROLL
-        for (int epi_v = 0; epi_v < FragmentSize; ++epi_v) {
+        for (int epi_v = 0; epi_v < size(trD_frag); ++epi_v) {
           trD_frag(epi_v) = cst_callbacks.visit(acc_frag_mn(epi_v), epi_v, epi_m, epi_n);
         }
         copy(params.xe_store_d, trD, rw_coord(_, epi_m, epi_n));
