@@ -112,6 +112,62 @@ struct TensorReLuFunc {
   }
 };
 
+template <
+  typename Element,               ///< Element type
+  typename Layout>                ///< Layout function
+struct TensorGeLuFunc {
+
+  /// View type
+  using TensorView = TensorView<Element, Layout>;
+
+  /// Coordinate in tensor's index space
+  using TensorCoord = typename TensorView::TensorCoord;
+
+  /// Parameters structure
+  struct Params {
+
+    //
+    // Data members
+    //
+
+    TensorView view;
+
+    //
+    // Methods
+    //
+
+    Params(
+      TensorView view_ = TensorView()
+    ):
+      view(view_) {
+
+    }
+  };
+
+  //
+  // Data members
+  //
+
+  Params params;
+
+  //
+  // Methods
+  //
+
+  CUTLASS_DEVICE
+  TensorGeLuFunc(Params const &params): params(params) {
+
+  }
+
+  CUTLASS_DEVICE
+  void operator()(TensorCoord const &coord) {
+
+    Element const & value = params.view.at(coord);
+    
+    params.view.at(coord) = Element(cutlass::constants::half<Element>() * value *
+      (cutlass::constants::one<Element>() + (Element)erff((float)(value * cutlass::constants::half_root_two<Element>()))));
+  }
+};
 } // namespace detail
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -133,6 +189,22 @@ void TensorReLu(
   );
 }
 
+/// Apply GeLu on a tensor
+template <
+  typename Element,               ///< Element type
+  typename Layout>                ///< Layout function
+void TensorGeLu(
+  TensorView<Element, Layout> view) {       ///< destination tensor
+  
+  using Func = detail::TensorGeLuFunc<Element, Layout>;
+  using Params = typename Func::Params;
+
+  TensorForEach<Func, Layout::kRank, Params>(
+    view.extent(),
+    Params(view)
+  );
+}
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -145,6 +217,11 @@ namespace sycl {
   template <>
   struct is_device_copyable <
   cutlass::reference::device::detail::TensorReLuFunc<float,
+                                                      cutlass::layout::RowMajor>::Params> : std::true_type {};
+
+  template <>
+  struct is_device_copyable <
+  cutlass::reference::device::detail::TensorGeLuFunc<float,
                                                       cutlass::layout::RowMajor>::Params> : std::true_type {};
 }
 #endif
