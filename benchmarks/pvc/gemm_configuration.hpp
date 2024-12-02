@@ -57,7 +57,8 @@ template<
   class ElementA, class LayoutA,
   class ElementB, class LayoutB,
   class ElementC, class LayoutC,
-  class ElementAccumulator>
+  class ElementAccumulator,
+  class TileShape, class TiledMma>
 struct GemmConfiguration {
   static_assert(sizeof(ElementA) == 0, "No valid GemmConfiguration configuration exists.");
 };
@@ -68,44 +69,60 @@ struct GemmConfiguration {
 
 namespace detail {
 
-template<typename Element, typename Layout>
+template<typename Element, typename Layout, int M, int K>
 struct Gemm_OperandA;
 
-template<typename Element, typename Layout>
+template<typename Element, typename Layout, int K, int N>
 struct Gemm_OperandB;
 
 template<>
-struct Gemm_OperandA<bfloat16_t, layout::RowMajor> {
+struct Gemm_OperandA<bfloat16_t, layout::RowMajor, 32, 32> {
   using GmemTiledCopy = XE_2D_U16x32x32_LD_N;
 };
 
 template<>
-struct Gemm_OperandB<bfloat16_t, layout::RowMajor> {
+struct Gemm_OperandA<bfloat16_t, layout::RowMajor, 32, 16> {
+  using GmemTiledCopy = XE_2D_U16x32x16_LD_N;
+};
+
+template<>
+struct Gemm_OperandA<bfloat16_t, layout::RowMajor, 8, 32> {
+  using GmemTiledCopy = XE_2D_U16x8x32_LD_N;
+};
+
+template<>
+struct Gemm_OperandB<bfloat16_t, layout::RowMajor, 32, 32> {
   using GmemTiledCopy = XE_2D_U16x32x32_LD_V;
 };
 
+template<>
+struct Gemm_OperandB<bfloat16_t, layout::RowMajor, 16, 32> {
+  using GmemTiledCopy = XE_2D_U16x16x32_LD_V;
+};
 } // namespace details
 
-template<typename LayoutA, typename LayoutB, typename LayoutC>
+template<typename LayoutA, typename LayoutB, typename LayoutC,
+  class TileShape, class TiledMma>
 struct GemmConfiguration<
       arch::IntelPVC,
       bfloat16_t, LayoutA,
       bfloat16_t, LayoutB,
       float, LayoutC,
-      float> {
-  using TileShape = Shape<_256, _256, _32>;
-  using DispatchPolicy = MainloopIntelPVC<3>;;
-  using TiledMma = TiledMMA<
-    MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>,
-    Layout<Shape<_8,_4,_1>>,
-    Tile<_64,_64,_32>>;
-
+      float, TileShape, TiledMma> {
+  using DispatchPolicy = MainloopIntelPVC<3>;
+  static constexpr auto BLK_M = get<0>(TileShape{});
+  static constexpr auto BLK_N = get<1>(TileShape{});
+  static constexpr auto ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape());
+  static constexpr auto ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape());
+  static constexpr auto sg_m = ceil_div(BLK_M, ATOM_M);
+  static constexpr auto sg_n = ceil_div(BLK_N, ATOM_N);
+  static constexpr auto sg_k = get<2>(TileShape{});
   // A
-  using OperandA = detail::Gemm_OperandA<bfloat16_t, LayoutA>;
+  using OperandA = detail::Gemm_OperandA<bfloat16_t, LayoutA, sg_m, sg_k>;
   using GmemTiledCopyA = typename OperandA::GmemTiledCopy;
 
   // B
-  using OperandB = detail::Gemm_OperandB<bfloat16_t, LayoutB>;
+  using OperandB = detail::Gemm_OperandB<bfloat16_t, LayoutB, sg_k, 32>;
   using GmemTiledCopyB = typename OperandB::GmemTiledCopy;
 
   // Mainloop
