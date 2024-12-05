@@ -152,12 +152,14 @@ if (NOT CUTLASS_ENABLE_SYCL)
     57_hopper_grouped_gemm
     58_ada_fp8_gemm
     59_ampere_gather_scatter_conv
+    ampere
     )
     add_subdirectory(${EXAMPLE})
   endforeach()
 else()
   foreach(EXAMPLE
     14_ampere_tf32_tensorop_gemm
+    ampere
     cute
     sycl
     )

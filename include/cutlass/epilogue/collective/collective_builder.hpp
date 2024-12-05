@@ -114,6 +114,7 @@ struct CallbacksBuilder<
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "builders/sm90_builder.inl"
+#include "builders/sm80_builder.inl"
 
 #if defined(SYCL_INTEL_TARGET)
 #include "builders/xe_builder.inl"
