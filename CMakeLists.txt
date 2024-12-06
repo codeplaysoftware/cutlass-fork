@@ -94,6 +94,10 @@ endif()
 set(CUTLASS_ENABLE_SYCL OFF CACHE BOOL "Enable SYCL")
 set(CUTLASS_SYCL_PROFILING_ENABLED OFF CACHE BOOL "Use SYCL events to calculate device execution time")
 
+set(SWITCH_WG OFF CACHE BOOL "Enable SWITCH WG")
+if(SWITCH_WG)
+  add_compile_definitions(SWITCH_WG)
+endif()
 if (CUTLASS_ENABLE_SYCL)
   set(CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 

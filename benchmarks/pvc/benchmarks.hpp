@@ -34,15 +34,51 @@
 #include "../benchmark_runner.hpp"
 #include "gemm_configuration.hpp"
 
-using PvcGemmBF16BF16FP32_RRR = cutlass::gemm::device::GemmConfiguration<
+using PvcGemmBF16BF16FP32_RRR_1 = cutlass::gemm::device::GemmConfiguration<
         cutlass::arch::IntelPVC,
         cutlass::bfloat16_t, cutlass::layout::RowMajor,
         cutlass::bfloat16_t, cutlass::layout::RowMajor,
         float, cutlass::layout::RowMajor,
-        float>;
+        float,256,256,32,64,32>;
 
-CUTLASS_CREATE_GEMM_BENCHMARK(PvcGemmBF16BF16FP32_RRR);
+using PvcGemmBF16BF16FP32_RRR_2 = cutlass::gemm::device::GemmConfiguration<
+        cutlass::arch::IntelPVC,
+        cutlass::bfloat16_t, cutlass::layout::RowMajor,
+        cutlass::bfloat16_t, cutlass::layout::RowMajor,
+        float, cutlass::layout::RowMajor,
+        float,128,512,32,64,32>;
+
+using PvcGemmBF16BF16FP32_RRR_3 = cutlass::gemm::device::GemmConfiguration<
+        cutlass::arch::IntelPVC,
+        cutlass::bfloat16_t, cutlass::layout::RowMajor,
+        cutlass::bfloat16_t, cutlass::layout::RowMajor,
+        float, cutlass::layout::RowMajor,
+        float,256,128,32,32,32>;
+
+using PvcGemmBF16BF16FP32_RRR_4 = cutlass::gemm::device::GemmConfiguration<
+        cutlass::arch::IntelPVC,
+        cutlass::bfloat16_t, cutlass::layout::RowMajor,
+        cutlass::bfloat16_t, cutlass::layout::RowMajor,
+        float, cutlass::layout::RowMajor,
+        float,128,256,32,32,16>;
+
+using PvcGemmBF16BF16FP32_RRR_5 = cutlass::gemm::device::GemmConfiguration<
+        cutlass::arch::IntelPVC,
+        cutlass::bfloat16_t, cutlass::layout::RowMajor,
+        cutlass::bfloat16_t, cutlass::layout::RowMajor,
+        float, cutlass::layout::RowMajor,
+        float,8,128,8,32,32>;
+
+CUTLASS_CREATE_GEMM_BENCHMARK(PvcGemmBF16BF16FP32_RRR_1);
+CUTLASS_CREATE_GEMM_BENCHMARK(PvcGemmBF16BF16FP32_RRR_2);
+CUTLASS_CREATE_GEMM_BENCHMARK(PvcGemmBF16BF16FP32_RRR_3);
+CUTLASS_CREATE_GEMM_BENCHMARK(PvcGemmBF16BF16FP32_RRR_4);
+CUTLASS_CREATE_GEMM_BENCHMARK(PvcGemmBF16BF16FP32_RRR_5);
 
 static void register_benchmarks() {
-  CUTLASS_BENCHMARK(PvcGemmBF16BF16FP32_RRR);
+  CUTLASS_BENCHMARK(PvcGemmBF16BF16FP32_RRR_1);
+  CUTLASS_BENCHMARK(PvcGemmBF16BF16FP32_RRR_2);
+  CUTLASS_BENCHMARK(PvcGemmBF16BF16FP32_RRR_3);
+  CUTLASS_BENCHMARK(PvcGemmBF16BF16FP32_RRR_4);
+  CUTLASS_BENCHMARK(PvcGemmBF16BF16FP32_RRR_5);
 }

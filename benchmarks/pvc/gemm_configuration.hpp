@@ -57,7 +57,8 @@ template<
   class ElementA, class LayoutA,
   class ElementB, class LayoutB,
   class ElementC, class LayoutC,
-  class ElementAccumulator>
+  class ElementAccumulator,
+  int wg_m, int wg_n, int sg_m, int sg_n, int sg_k>
 struct GemmConfiguration {
   static_assert(sizeof(ElementA) == 0, "No valid GemmConfiguration configuration exists.");
 };
@@ -68,44 +69,59 @@ struct GemmConfiguration {
 
 namespace detail {
 
-template<typename Element, typename Layout>
+template<typename Element, typename Layout, int M, int K>
 struct Gemm_OperandA;
 
-template<typename Element, typename Layout>
+template<typename Element, typename Layout, int K, int N>
 struct Gemm_OperandB;
 
 template<>
-struct Gemm_OperandA<bfloat16_t, layout::RowMajor> {
+struct Gemm_OperandA<bfloat16_t, layout::RowMajor, 32, 32> {
   using GmemTiledCopy = XE_2D_U16x32x32_LD_N;
 };
 
 template<>
-struct Gemm_OperandB<bfloat16_t, layout::RowMajor> {
+struct Gemm_OperandA<bfloat16_t, layout::RowMajor, 32, 16> {
+  using GmemTiledCopy = XE_2D_U16x32x16_LD_N;
+};
+
+template<>
+struct Gemm_OperandA<bfloat16_t, layout::RowMajor, 8, 32> {
+  using GmemTiledCopy = XE_2D_U16x8x32_LD_N;
+};
+
+template<>
+struct Gemm_OperandB<bfloat16_t, layout::RowMajor, 32, 32> {
   using GmemTiledCopy = XE_2D_U16x32x32_LD_V;
 };
 
+template<>
+struct Gemm_OperandB<bfloat16_t, layout::RowMajor, 16, 32> {
+  using GmemTiledCopy = XE_2D_U16x16x32_LD_V;
+};
 } // namespace details
 
-template<typename LayoutA, typename LayoutB, typename LayoutC>
+template<typename LayoutA, typename LayoutB, typename LayoutC,
+  int wg_m, int wg_n, int sg_m, int sg_n, int sg_k>
 struct GemmConfiguration<
       arch::IntelPVC,
       bfloat16_t, LayoutA,
       bfloat16_t, LayoutB,
       float, LayoutC,
-      float> {
-  using TileShape = Shape<_256, _256, _32>;
+      float, wg_m, wg_n, sg_m, sg_n, sg_k> {
+  using TileShape = Shape<Int<wg_m>, Int<wg_n>, Int<sg_k>>;
   using DispatchPolicy = MainloopIntelPVC<3>;;
   using TiledMma = TiledMMA<
     MMA_Atom<XE_8x16x16_F32BF16BF16F32_TT>,
-    Layout<Shape<_8,_4,_1>>,
-    Tile<_64,_64,_32>>;
+    Layout<Shape<Int<wg_m/sg_m>,Int<wg_n/sg_n>,_1>>,
+    Tile<Int<8*wg_m/sg_m>,Int<16*wg_n/sg_n>,Int<sg_k>>>;
 
   // A
-  using OperandA = detail::Gemm_OperandA<bfloat16_t, LayoutA>;
+  using OperandA = detail::Gemm_OperandA<bfloat16_t, LayoutA, sg_m, sg_k>;
   using GmemTiledCopyA = typename OperandA::GmemTiledCopy;
 
   // B
-  using OperandB = detail::Gemm_OperandB<bfloat16_t, LayoutB>;
+  using OperandB = detail::Gemm_OperandB<bfloat16_t, LayoutB, sg_k, 32>;
   using GmemTiledCopyB = typename OperandB::GmemTiledCopy;
 
   // Mainloop
