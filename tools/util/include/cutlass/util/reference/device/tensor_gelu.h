@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2017 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -42,6 +42,7 @@
 #include "cutlass/tensor_view.h"
 
 #include "cutlass/util/reference/device/tensor_foreach.h"
+#include "cutlass/util/reference/device/tensor_relu.h"
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -57,7 +58,7 @@ namespace detail {
 template <
   typename Element,               ///< Element type
   typename Layout>                ///< Layout function
-struct TensorReLuFunc {
+struct TensorGeLuFunc {
 
   /// View type
   using TensorView = TensorView<Element, Layout>;
@@ -73,18 +74,15 @@ struct TensorReLuFunc {
     //
 
     TensorView view;
-    Element threshold;
-
 
     //
     // Methods
     //
 
     Params(
-      TensorView view_ = TensorView(),
-      Element threshold_ = Element(0)
+      TensorView view_ = TensorView()
     ):
-      view(view_), threshold(threshold_) {
+      view(view_) {
 
     }
   };
@@ -100,7 +98,7 @@ struct TensorReLuFunc {
   //
 
   CUTLASS_DEVICE
-  TensorReLuFunc(Params const &params): params(params) {
+  TensorGeLuFunc(Params const &params): params(params) {
 
   }
 
@@ -108,28 +106,28 @@ struct TensorReLuFunc {
   void operator()(TensorCoord const &coord) {
 
     Element const & value = params.view.at(coord);
-    params.view.at(coord) = (value < params.threshold) ? params.threshold : value;
+    
+    params.view.at(coord) = Element(cutlass::constants::half<Element>() * value *
+      (cutlass::constants::one<Element>() + (Element)erff((float)(value * cutlass::constants::half_root_two<Element>()))));
   }
 };
-
 } // namespace detail
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-/// Apply ReLu on a tensor
+/// Apply GeLu on a tensor
 template <
   typename Element,               ///< Element type
   typename Layout>                ///< Layout function
-void TensorReLu(
-  TensorView<Element, Layout> view,       ///< destination tensor
-  Element threshold = Element(0)) {         ///< ReLu threshold
+void TensorGeLu(
+  TensorView<Element, Layout> view) {       ///< destination tensor
   
-  using Func = detail::TensorReLuFunc<Element, Layout>;
+  using Func = detail::TensorGeLuFunc<Element, Layout>;
   using Params = typename Func::Params;
 
   TensorForEach<Func, Layout::kRank, Params>(
     view.extent(),
-    Params(view, threshold)
+    Params(view)
   );
 }
 
@@ -144,7 +142,7 @@ void TensorReLu(
 namespace sycl {
   template <>
   struct is_device_copyable <
-  cutlass::reference::device::detail::TensorReLuFunc<float,
+  cutlass::reference::device::detail::TensorGeLuFunc<float,
                                                       cutlass::layout::RowMajor>::Params> : std::true_type {};
 }
 #endif
