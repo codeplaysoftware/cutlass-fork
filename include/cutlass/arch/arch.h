@@ -35,6 +35,7 @@
 #pragma once
 
 #include "cutlass/cutlass.h"
+#include "cutlass/platform/platform.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -47,20 +48,24 @@ namespace arch {
 CUTLASS_DEVICE
 int LaneId() {
   int ret;
-#if !defined(CUTLASS_ENABLE_SYCL) || defined(__SYCL_CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__SYCL_CUDA_ARCH__)
   asm ("mov.u32 %0, %%laneid;" : "=r"(ret) : );
-#endif
   return ret;
+#else
+  CUTLASS_GCC_UNREACHABLE;
+#endif
 }
 
 /// Computes SM number the thread is running on
 CUTLASS_DEVICE
 int SmId() {
   int ret;
-#if !defined(CUTLASS_ENABLE_SYCL) || defined(__SYCL_CUDA_ARCH__)
+#if defined(__CUDA_ARCH__) || defined(__SYCL_CUDA_ARCH__)
   asm ("mov.u32 %0, %%smid;" : "=r"(ret) : );
-#endif
   return ret;
+#else
+  CUTLASS_GCC_UNREACHABLE;
+#endif
 }
 
 #endif
