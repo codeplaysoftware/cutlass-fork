@@ -57,7 +57,7 @@ template<
   class ElementA, class LayoutA,
   class ElementB, class LayoutB,
   class ElementC, class LayoutC,
-  class ElementAccumulator>
+  class ElementAccumulator, class TileScheduler>
 struct GemmConfiguration {
   static_assert(sizeof(ElementA) == 0, "No valid GemmConfiguration configuration exists.");
 };
@@ -86,13 +86,13 @@ struct Gemm_OperandB<bfloat16_t, layout::RowMajor> {
 
 } // namespace details
 
-template<typename LayoutA, typename LayoutB, typename LayoutC>
+template<typename LayoutA, typename LayoutB, typename LayoutC, class TileScheduler>
 struct GemmConfiguration<
       arch::IntelPVC,
       bfloat16_t, LayoutA,
       bfloat16_t, LayoutB,
       float, LayoutC,
-      float> {
+      float, TileScheduler> {
   using TileShape = Shape<_256, _256, _32>;
   using DispatchPolicy = MainloopIntelPVC<3>;;
   using TiledMma = TiledMMA<
@@ -140,7 +140,8 @@ struct GemmConfiguration<
   using GemmKernel = kernel::GemmUniversal<
     Shape<int, int, int, int>,
     CollectiveMainloop,
-    CollectiveEpilogue
+    CollectiveEpilogue,
+    TileScheduler
   >;
 
   using Gemm = GemmUniversalAdapter<GemmKernel>;

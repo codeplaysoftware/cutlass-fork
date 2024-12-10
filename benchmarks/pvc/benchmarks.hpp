@@ -39,10 +39,20 @@ using PvcGemmBF16BF16FP32_RRR = cutlass::gemm::device::GemmConfiguration<
         cutlass::bfloat16_t, cutlass::layout::RowMajor,
         cutlass::bfloat16_t, cutlass::layout::RowMajor,
         float, cutlass::layout::RowMajor,
-        float>;
+        float, void>;
 
 CUTLASS_CREATE_GEMM_BENCHMARK(PvcGemmBF16BF16FP32_RRR);
 
+using PvcGemmBF16BF16FP32_StreamK_RRR = cutlass::gemm::device::GemmConfiguration<
+        cutlass::arch::IntelPVC,
+        cutlass::bfloat16_t, cutlass::layout::RowMajor,
+        cutlass::bfloat16_t, cutlass::layout::RowMajor,
+        float, cutlass::layout::RowMajor,
+        float, cutlass::gemm::StreamKScheduler>;
+
+CUTLASS_CREATE_GEMM_BENCHMARK(PvcGemmBF16BF16FP32_StreamK_RRR);
+
 static void register_benchmarks() {
   CUTLASS_BENCHMARK(PvcGemmBF16BF16FP32_RRR);
+  CUTLASS_BENCHMARK(PvcGemmBF16BF16FP32_StreamK_RRR);
 }
