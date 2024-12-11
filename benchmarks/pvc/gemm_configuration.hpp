@@ -52,12 +52,14 @@ namespace cutlass {
 namespace gemm {
 namespace device {
 
+enum class Scheduler { Parallel, SplitK, StreamK };
+
 template<
   class ArchTag,
   class ElementA, class LayoutA,
   class ElementB, class LayoutB,
   class ElementC, class LayoutC,
-  class ElementAccumulator>
+  class ElementAccumulator, Scheduler TileScheduler>
 struct GemmConfiguration {
   static_assert(sizeof(ElementA) == 0, "No valid GemmConfiguration configuration exists.");
 };
@@ -86,13 +88,14 @@ struct Gemm_OperandB<bfloat16_t, layout::RowMajor> {
 
 } // namespace details
 
-template<typename LayoutA, typename LayoutB, typename LayoutC>
+
+template<typename LayoutA, typename LayoutB, typename LayoutC, Scheduler TileScheduler>
 struct GemmConfiguration<
       arch::IntelPVC,
       bfloat16_t, LayoutA,
       bfloat16_t, LayoutB,
       float, LayoutC,
-      float> {
+      float, TileScheduler> {
   using TileShape = Shape<_256, _256, _32>;
   using DispatchPolicy = MainloopIntelPVC<3>;;
   using TiledMma = TiledMMA<
@@ -140,10 +143,29 @@ struct GemmConfiguration<
   using GemmKernel = kernel::GemmUniversal<
     Shape<int, int, int, int>,
     CollectiveMainloop,
-    CollectiveEpilogue
+    CollectiveEpilogue,
+    std::conditional_t<TileScheduler == Scheduler::Parallel, void, cutlass::gemm::StreamKScheduler>
   >;
 
   using Gemm = GemmUniversalAdapter<GemmKernel>;
+
+  constexpr static typename GemmKernel::Arguments defaultArguments() {
+    using StreamKMode =
+      cutlass::gemm::kernel::detail::PersistentTileSchedulerXeStreamKParams::DecompositionMode;
+    if constexpr (TileScheduler == Scheduler::Parallel) {
+      return {};
+    }
+    else if constexpr (TileScheduler == Scheduler::StreamK) {
+      typename GemmKernel::Arguments arguments{};
+      arguments.scheduler = {1, StreamKMode::StreamK};
+      return arguments;
+    }
+    else if constexpr (TileScheduler == Scheduler::SplitK) {
+      typename GemmKernel::Arguments arguments{};
+      arguments.scheduler = {1, StreamKMode::SplitK};
+      return arguments;
+    }
+  }
 };
 
 } // namespace device
