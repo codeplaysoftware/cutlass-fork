@@ -42,8 +42,11 @@
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-
+#ifdef SYCL_INTEL_TARGET
+static const int NumThreadsPerWarp = 16;
+#else
 static const int NumThreadsPerWarp = 32;
+#endif
 static const int NumThreadsPerWarpGroup = 128;
 static const int NumWarpsPerWarpGroup = NumThreadsPerWarpGroup / NumThreadsPerWarp;
 static const int NumThreadsPerHalfWarp = NumThreadsPerWarp / 2;
@@ -249,10 +252,11 @@ unsigned int byte_perm(unsigned int x, unsigned int y, unsigned int s) {
 
 // shfl
 
+template<typename T>
 CUTLASS_DEVICE
-unsigned int shfl_up_sync(
+T shfl_up_sync(
   unsigned int const mask,
-  unsigned int const var,
+  T const var,
   int const delta,
   int const width = NumThreadsPerWarp) {
 #if defined(__CUDA_ARCH__)
@@ -264,10 +268,11 @@ unsigned int shfl_up_sync(
 #endif
 }
 
+template<typename T>
 CUTLASS_DEVICE
-unsigned int shfl_down_sync(
+T shfl_down_sync(
   unsigned int const mask,
-  unsigned int const var,
+  T const var,
   int const delta,
   int const width = NumThreadsPerWarp) {
 #if defined(__CUDA_ARCH__)
@@ -279,10 +284,11 @@ unsigned int shfl_down_sync(
 #endif
 }
 
+template<typename T>
 CUTLASS_DEVICE
-unsigned int shfl_sync(
+T shfl_sync(
   unsigned int const mask,
-  unsigned int const var,
+  T const var,
   int const delta,
   int const width = NumThreadsPerWarp) {
 #if defined(__CUDA_ARCH__)
@@ -296,10 +302,11 @@ unsigned int shfl_sync(
 #endif
 }
 
+template<typename T>
 CUTLASS_DEVICE
-unsigned int shfl_xor_sync(
+T shfl_xor_sync(
   unsigned int const mask,
-  unsigned int const var,
+  T const var,
   int const laneMask,
   int const width = NumThreadsPerWarp) {
 #if defined(__CUDA_ARCH__)

@@ -41,6 +41,12 @@
 #include "cute/tensor.hpp"
 #include "sm90_visitor_tma_warpspecialized.hpp"
 
+#if defined(__CUDA_ARCH__) || defined(__SYCL_CUDA_ARCH__)
+#define IS_CUDA_GPU 1
+#else
+#define IS_CUDA_GPU 0
+#endif
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace cutlass::epilogue::fusion {
@@ -207,23 +213,24 @@ Array<float, 4> top_4_reduce(Array<float, 4> a, Array<float, 4> b) {
 template <typename Element, int N>
 CUTLASS_DEVICE
 void add_element_to_desc_sorted_array(cutlass::Array<Element, N>& a, Element b) {
-  if constexpr (N == 2 && is_same_v<Element, float>) {
+  if constexpr (IS_CUDA_GPU && N == 2 && is_same_v<Element, float>) {
     a = top_2_reduce_scalar(a, b);
   }
-  else if constexpr (N == 4 && is_same_v<Element, float>) {
+  else if constexpr (IS_CUDA_GPU && N == 4 && is_same_v<Element, float>) {
     a = top_4_reduce_scalar(a, b);
   }
   else {
     // slower generic path with branching, slower, and can cause register spill
     CUTLASS_PRAGMA_UNROLL
     for (int k = 0; k < N; ++k) {
-      if (a[k] <= b) {
+      if (a[k] < b) {
         // Shift down
         CUTLASS_PRAGMA_UNROLL
         for (int l = N - 1; l > k; --l) {
           a[l] = a[l-1];
         }
         a[k] = b;
+        break;
       }
     }
   }
@@ -234,10 +241,10 @@ void add_element_to_desc_sorted_array(cutlass::Array<Element, N>& a, Element b) 
 template <typename Element, int N>
 CUTLASS_DEVICE
 void merge_desc_sorted_arrays(cutlass::Array<Element, N>& a, const cutlass::Array<Element, N>& b) {
-  if constexpr (N == 2 && is_same_v<Element, float>) {
+  if constexpr (IS_CUDA_GPU && N == 2 && is_same_v<Element, float>) {
     a = top_2_reduce(a, b);
   }
-  else if constexpr (N == 4 && is_same_v<Element, float>) {
+  else if constexpr (IS_CUDA_GPU && N == 4 && is_same_v<Element, float>) {
     a = top_4_reduce(a, b);
   }
   else {
@@ -318,7 +325,7 @@ float fast_masked_softmax(float value, float minimum, float logsumexp) {
 template <typename Element>
 CUTLASS_DEVICE
 Element masked_softmax(Element value, Element minimum, Element logsumexp) {
-  if constexpr (is_same_v<Element, float>) {
+  if constexpr (IS_CUDA_GPU && is_same_v<Element, float>) {
     // Inline PTX implementation
     // Significantly reduces register requirements
     return fast_masked_softmax(value, minimum, logsumexp);
@@ -409,14 +416,14 @@ private:
     // Butterfly reduction
     CUTLASS_DEVICE
     void shuffle_xor_sync(int laneMask) {
-      if constexpr (TopK == 2) {
+      if constexpr (IS_CUDA_GPU && TopK == 2) {
         static_assert(sizeof(TopKResult) == sizeof(uint64_t));
         uint64_t top_k = reinterpret_cast<uint64_t&>(*this);
         top_k = shfl_xor_sync(0xFFFFFFFF, top_k, laneMask);
         auto synced_v = reinterpret_cast<TopKResult&>(top_k);
         detail::merge_desc_sorted_arrays(top_k_, synced_v.top_k_);
       }
-      else if constexpr (TopK == 4) {
+      else if constexpr (IS_CUDA_GPU && TopK == 4) {
         static_assert(sizeof(TopKResult) == 2 * sizeof(uint64_t));
         uint64_t* top_k_ptr = reinterpret_cast<uint64_t*>(this);
         uint64_t top_k_arr[2];
@@ -440,14 +447,14 @@ private:
     // Warp shuffle reduction
     CUTLASS_DEVICE
     void shuffle_down_sync(uint32_t delta) {
-      if constexpr (TopK == 2) {
+      if constexpr (IS_CUDA_GPU && TopK == 2) {
         static_assert(sizeof(TopKResult) == sizeof(uint64_t));
         uint64_t top_k = reinterpret_cast<uint64_t&>(*this);
         top_k = shfl_down_sync(0xFFFFFFFF, top_k, delta);
         auto synced_v = reinterpret_cast<TopKResult&>(top_k);
         detail::merge_desc_sorted_arrays(top_k_, synced_v.top_k_);
       }
-      else if constexpr (TopK == 4) {
+      else if constexpr (IS_CUDA_GPU && TopK == 4) {
         static_assert(sizeof(TopKResult) == 2 * sizeof(uint64_t));
         uint64_t* top_k_ptr = reinterpret_cast<uint64_t*>(this);
         uint64_t top_k_arr[2];

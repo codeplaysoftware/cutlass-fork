@@ -303,6 +303,17 @@ public:
     Tensor rw_coord = tOuti(_,_,_,l_coord);
     Tensor mD_crd = make_identity_tensor(make_shape(M,N));
     Tensor cD = local_tile(mD_crd, take<0,2>(SubgroupTileShape{}), make_coord(m_coord, n_coord));
+    
+    ThrCopy thread_g2r = params.xe_load_c.get_slice(thread_idx);
+
+    // OOB predication for tile quantization "residue"
+    // Absolute coordinate tensors (dynamic)                                                    // (M,N)
+    using EpilogueTile = decltype(get<0>(params.xe_store_d.get_layoutS_MN()).shape());
+    Tensor cD_mn = local_tile(mD_crd, take<0,2>(SubgroupTileShape{}), make_coord(m_coord, n_coord));          // (CTA_M,CTA_N)
+    Tensor tRS_cD_mn = thread_g2r.partition_D(flat_divide(cD_mn, EpilogueTile{}));     // (G2R,G2R_M,G2R_N,EPI_M,EPI_N)
+
+    Tensor tRS_cD = make_counting_tensor(tRS_cD_mn.layout());                          // (G2R,G2R_M,G2R_N,EPI_M,EPI_N)
+
     // Get the fusion callbacks
     constexpr bool RefSrc = true;
     auto residue_mn = make_coord(M, N);
@@ -312,10 +323,10 @@ public:
                       tile_coord_mnkl,
                       tiled_mma,
                       SubgroupTileShape{}, // Epilogue tile
-                      params.xe_load_c,
+                      params.xe_store_d,
                       cD,
                       residue_mn,
-                      cD,
+                      tRS_cD,
                       residue_mn,
                       trC,
                       thread_idx,
@@ -331,6 +342,8 @@ public:
     for (int epi_n = 0; epi_n < FragsN; epi_n++) {
       CUTLASS_PRAGMA_UNROLL
       for (int epi_m = 0; epi_m < FragsM; epi_m++) {
+        bool is_last_iteration = epi_m == FragsM-1 && epi_n == FragsN-1;
+        cst_callbacks.begin_loop(epi_m, epi_n);
 
         if (is_C_load_needed) {
           copy(params.xe_load_c, rw_coord(_, epi_m, epi_n), trC);
@@ -341,10 +354,17 @@ public:
         auto acc_frag_mn = acc_frag(_, epi_m, epi_n);
 
         CUTLASS_PRAGMA_UNROLL
-        for (int epi_v = 0; epi_v < FragmentSize; ++epi_v) {
+        for (int epi_v = 0; epi_v < size(trD_frag); ++epi_v) {
           trD_frag(epi_v) = cst_callbacks.visit(acc_frag_mn(epi_v), epi_v, epi_m, epi_n);
         }
+        
+        cst_callbacks.reduce(nullptr, [](){}, epi_m, epi_n, is_last_iteration, trD_frag);
+
+        //TODO(Codeplay): cst_callbacks.postreduce()
+
         copy(params.xe_store_d, trD, rw_coord(_, epi_m, epi_n));
+        
+        cst_callbacks.end_loop(epi_m, epi_n);
       }
     }
 
