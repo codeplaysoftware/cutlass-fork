@@ -39,6 +39,7 @@ import numpy as np
 import cutlass
 from cutlass.backend.frontend import CupyFrontend, NumpyFrontend, TorchFrontend
 from cutlass.backend.memory_manager import DevicePtrWrapper
+from cutlass.backend.utils.device import default_stream
 from cutlass.utils.datatypes import is_cupy_tensor, is_numpy_tensor, is_torch_tensor
 
 
@@ -58,7 +59,7 @@ class ArgumentBase:
         # tensor_C can be interpreted as the bias with bias=True in keyword args
         self.bias = kwargs.get("bias", False)
 
-        self.stream = kwargs.get("stream", cuda.CUstream(0))
+        self.stream = kwargs.get("stream", default_stream())
 
         # RMM buffers used to track tensor lifetime
         self.buffers = {}
@@ -83,7 +84,7 @@ class ArgumentBase:
         if is_numpy_tensor(tensor):
             if is_output:
                 assert name
-            self.buffers[name] = NumpyFrontend.argument(tensor, is_output)
+            self.buffers[name] = NumpyFrontend.argument(tensor, is_output, self.stream)
             if is_output:
                 self.host_tensors[name] = tensor
             return self.buffers[name].ptr
