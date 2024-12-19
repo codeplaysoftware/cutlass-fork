@@ -470,7 +470,8 @@ public:
         }
 #else
         auto event = launch<device_kernel<GemmKernel>>(launch_policy{
-          sycl_grid, sycl_block, local_mem_size{static_cast<std::size_t>(smem_size)}},
+          sycl_grid, sycl_block, local_mem_size{static_cast<std::size_t>(smem_size)},
+          kernel_properties{sycl::ext::oneapi::experimental::max_linear_work_group_size<GemmKernel::MaxThreadsPerBlock>}},
           params);
         EventManager::getInstance().addEvent(event);
 #endif
