@@ -726,6 +726,8 @@ struct XE_2D_U16x16x8_LD_T {
 };
 
 struct XE_2D_U16x16x16_LD_T {
+  using Shape_MN = Shape<_16, _16>;
+
   using inst_dtype = uint32_t;
   template <class T>
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
