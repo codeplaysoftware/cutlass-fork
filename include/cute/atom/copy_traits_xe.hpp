@@ -40,48 +40,81 @@ namespace cute {
 
 namespace detail
 {
-  template<class CopyOp>
-  struct is_transpose : bool_constant<false> {};
+  struct MKL_Indicator {};
+  struct NKL_Indicator {};
 
-  template<>
-  struct is_transpose<XE_2D_U16x16x8_LD_T> : bool_constant<true>{};
+  template <class MNKL_Indicator, class Enable = void>
+  struct is_MKL_layout {
+    static constexpr bool value = false;
+  };
 
-  template<>
-  struct is_transpose<XE_2D_U16x16x16_LD_T> : bool_constant<true>{};
+  template <class MNKL_Indicator>
+  struct is_MKL_layout<MNKL_Indicator, std::enable_if_t<std::is_same_v<MNKL_Indicator, MKL_Indicator>>> {
+    static constexpr bool value = true;
+  };
 
-  template<>
-  struct is_transpose<XE_2D_U32x16x2_LD_T> : bool_constant<true>{};
+  template <class MNKL_Indicator, class Enable = void>
+  struct is_NKL_layout {
+    static constexpr bool value = false;
+  };
 
-  template<>
-  struct is_transpose<XE_2D_U32x16x4_LD_T> : bool_constant<true>{};
+  template <class MNKL_Indicator>
+  struct is_NKL_layout<MNKL_Indicator, std::enable_if_t<std::is_same_v<MNKL_Indicator, NKL_Indicator>>> {
+    static constexpr bool value = true;
+  };
 
-  template<>
-  struct is_transpose<XE_2D_U32x16x8_LD_T> : bool_constant<true>{};
-
-  template<>
-  struct is_transpose<XE_2D_U64x8x1_LD_T> : bool_constant<true>{};
-
-  template<>
-  struct is_transpose<XE_2D_U64x8x2_LD_T> : bool_constant<true>{};
-
-  template<>
-  struct is_transpose<XE_2D_U64x8x4_LD_T> : bool_constant<true>{};
+  template <class MNKL_Indicator, class Stride>
+  struct is_transpose_load{
+     static constexpr bool value = (is_MKL_layout<MNKL_Indicator>::value
+                                        && std::is_same_v<cutlass::detail::StrideToLayoutTagA_t<Stride>, cutlass::layout::ColumnMajor>)
+                                   || (is_NKL_layout<MNKL_Indicator>::value
+                                        && std::is_same_v<cutlass::detail::StrideToLayoutTagB_t<Stride>, cutlass::layout::ColumnMajor>);
+  };
 
   template <class, class Enable = void> constexpr bool has_inst_dtype = false;
 
   template <class T>
   constexpr bool has_inst_dtype<T, cute::void_t<typename T::inst_dtype>> = true;
+
+  template <class T, class dtype, class Enable = void>
+  struct size_of_inst {
+    static constexpr auto value = sizeof(dtype);
+  };
+
+  template <class T, class dtype>
+  struct size_of_inst<T, dtype, std::enable_if_t<has_inst_dtype<T>>> {
+    static constexpr auto value = sizeof(typename T::inst_dtype);
+  };
+
 } // namespace detail end
 
-template <class CopyOp, class... ArgTs> struct XE_2D_LD_Unpack {
+template <class CopyOp,
+          class Indicator_MNK = detail::MKL_Indicator,
+          class GStride = cute::Stride<int64_t, cute::Int<1>, int64_t>>
+struct XE_2D_LD_Unpack {
   const void *base_ptr;
   uint32_t width;
   uint32_t height;
   uint32_t pitch;
+  
+  static constexpr bool is_mkl = detail::is_MKL_layout<Indicator_MNK>::value;
+  static constexpr bool is_nkl = detail::is_NKL_layout<Indicator_MNK>::value;
+  static constexpr bool is_transpose = detail::is_transpose_load<Indicator_MNK, GStride>::value;
 
-  XE_2D_LD_Unpack(const void *ptr, uint32_t const &w,
-                  uint32_t const &h, uint32_t const &p)
-      : base_ptr(ptr), width(w), height(h), pitch(p) {}
+  static_assert(is_mkl != is_nkl);
+
+  XE_2D_LD_Unpack(const void *ptr, uint32_t const &y,
+                  uint32_t const &x, uint32_t const &p = 0) : base_ptr(ptr) {
+    if (is_nkl) {
+      width = is_transpose ? x : y;
+      height = is_transpose ? y : x;
+      pitch = (p == 0 ? width : p);
+    } else {
+      width = is_transpose ? y : x;
+      height = is_transpose ? x : y;
+      pitch = (p == 0 ? width : p);
+    }
+  }
 
   template <class TraitsArgs>
   XE_2D_LD_Unpack(TraitsArgs const &traits) : base_ptr(traits.base_ptr),
@@ -89,7 +122,7 @@ template <class CopyOp, class... ArgTs> struct XE_2D_LD_Unpack {
 
   XE_2D_LD_Unpack() {}
 
-  using Traits_LD_t = Copy_Traits<CopyOp, ArgTs...>;
+  using Traits_LD_t = Copy_Traits<CopyOp, Indicator_MNK, GStride>;
 
   template <class TS, class SLayout, class TD, class DLayout>
   CUTE_HOST_DEVICE friend constexpr void
@@ -100,19 +133,23 @@ template <class CopyOp, class... ArgTs> struct XE_2D_LD_Unpack {
     using dtype = typename Tensor<TD, DLayout>::value_type;
 
     dtype *base_addr = (dtype *)traits.base_ptr;
-
-    auto [m, n, l] = src.data().coord_;
-
-    auto inst_size = sizeof(dtype);
-
-    if constexpr (detail::has_inst_dtype<CopyOp>) {
-      inst_size = sizeof(typename CopyOp::inst_dtype);
+  
+    int x, y;
+    auto [coord_0, coord_1, z] = src.data().coord_;
+    if constexpr (is_mkl ^ is_transpose) {
+      x = coord_1;
+      y = coord_0;
+    } else {
+      x = coord_0;
+      y = coord_1;
     }
 
-    CopyOp::copy(base_addr + l * traits.width * traits.height,
+    static constexpr auto inst_size = detail::size_of_inst<CopyOp, dtype>::value;
+ 
+    CopyOp::copy(base_addr + z * traits.width * traits.height,
                  traits.width * sizeof(dtype), traits.height,
                  traits.pitch * sizeof(dtype),
-                 intel::coord_t{(int)(n * sizeof(dtype) / inst_size), (int)(m)},
+                 intel::coord_t{(int)(x * sizeof(dtype) / inst_size), y},
                  &*dst.data());
   }
 
@@ -134,20 +171,62 @@ template <class CopyOp, class... ArgTs> struct XE_2D_LD_Unpack {
                            intel::coord_t{(int)n, (int)m});
   }
 
-  template <class GCoord, class GShape, class GStride, class Basis = decltype(make_seq<rank(GStride{})>{})>
-  CUTE_HOST_DEVICE constexpr auto get_pvc_tensor(GCoord const &coord,
-                                                 GShape const &shape,
-                                                 GStride const &stride, 
-                                                 Basis const & basis = {}) const {
+  template <class GShape>
+  CUTE_HOST_DEVICE constexpr auto get_pvc_tensor(int m_coord, int n_coord, int l_coord,
+                                                 GShape const &shape) const {
 
     auto R = rank(GShape{});
-    static_assert(R == 3 || R == 4, "mismatch rank");
+    static_assert(R == 3, "mismatch rank");
+
     auto t_shape = cute::tuple_cat(make_shape(_1{}), take<1, R>(shape));
-    auto t_stride =  cute::tuple_cat(make_stride(_1{}), transform(basis, stride, [&](auto i, auto s){
-        return E<i>{} * s;
-    }));
-    return make_tensor(make_inttuple_iter(coord),
-                       make_layout(t_shape, t_stride));
+
+    auto basis =  make_seq<rank(typename CopyOp::Shape_MN{})>{};
+     
+    if constexpr (is_mkl) {
+      if constexpr (!is_transpose) {
+        auto t_stride =  cute::tuple_cat(make_stride(_1{}), transform(basis, typename CopyOp::Shape_MN{},
+                                                                      [&](auto i, auto s){
+                                                                        return E<i>{} * s;
+                                                                      }));
+        return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord, l_coord)),
+                          make_layout(t_shape, t_stride));
+      } else {
+        auto t_stride =  cute::tuple_cat(make_stride(_1{}), transform((basis), typename CopyOp::Shape_MN{},
+                                                                      [&](auto i, auto s){
+                                                                        return E<i>{} * s;
+                                                                      }));
+        return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord,  l_coord)),
+                          make_layout(t_shape, t_stride));
+      }
+    } else if constexpr (is_nkl) {
+      if constexpr (!is_transpose) {
+        auto t_stride =  cute::tuple_cat(make_stride(_1{}), transform(reverse(basis), typename CopyOp::Shape_MN{},
+                                                                      [&](auto i, auto s){
+                                                                        return E<i>{} * s;
+                                                                      }));
+        return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord, l_coord)),
+                          make_layout(t_shape, t_stride));
+      } else {
+        auto t_stride =  cute::tuple_cat(make_stride(_1{}), transform(reverse(basis), typename CopyOp::Shape_MN{},
+                                                                      [&](auto i, auto s){
+                                                                        return E<i>{} * s;
+                                                                      }));
+        return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord,  l_coord)),
+                          make_layout(t_shape, t_stride));
+      }
+    }
+  }
+
+  template <class GShape, class Direction>
+  CUTE_HOST_DEVICE constexpr auto get_pvc_tensor_B(int m_coord, int n_coord, int l,
+                                                 GShape const &shape,
+                                                 Direction const& direction) const {
+
+    auto R = rank(GShape{});
+    static_assert(R == 3, "mismatch rank");
+    auto t_shape = cute::tuple_cat(make_shape(_1{}), take<1, R>(shape));
+
+
   }
 
   template <class T1, class T2, class... TraitsArgs>
