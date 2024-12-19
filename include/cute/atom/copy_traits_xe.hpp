@@ -217,18 +217,6 @@ struct XE_2D_LD_Unpack {
     }
   }
 
-  template <class GShape, class Direction>
-  CUTE_HOST_DEVICE constexpr auto get_pvc_tensor_B(int m_coord, int n_coord, int l,
-                                                 GShape const &shape,
-                                                 Direction const& direction) const {
-
-    auto R = rank(GShape{});
-    static_assert(R == 3, "mismatch rank");
-    auto t_shape = cute::tuple_cat(make_shape(_1{}), take<1, R>(shape));
-
-
-  }
-
   template <class T1, class T2, class... TraitsArgs>
   static constexpr auto with(T1 && arg1, T2 && arg2, TraitsArgs&&... args) {
       return Traits_LD_t{arg1, arg2, args...};
