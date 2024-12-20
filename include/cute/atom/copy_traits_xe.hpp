@@ -63,12 +63,12 @@ namespace detail
     static constexpr bool value = true;
   };
 
-  template <class MNKL_Indicator, class Stride>
+  template <class MNKL_Indicator, class Stride_t>
   struct is_transpose_load{
      static constexpr bool value = (is_MKL_layout<MNKL_Indicator>::value
-                                        && std::is_same_v<cutlass::detail::StrideToLayoutTagA_t<Stride>, cutlass::layout::ColumnMajor>)
+                                        && std::is_same_v<cutlass::detail::StrideToLayoutTagA_t<Stride_t>, cutlass::layout::ColumnMajor>)
                                    || (is_NKL_layout<MNKL_Indicator>::value
-                                        && std::is_same_v<cutlass::detail::StrideToLayoutTagB_t<Stride>, cutlass::layout::ColumnMajor>);
+                                        && std::is_same_v<cutlass::detail::StrideToLayoutTagB_t<Stride_t>, cutlass::layout::ColumnMajor>);
   };
 
   template <class, class Enable = void> constexpr bool has_inst_dtype = false;
@@ -86,11 +86,18 @@ namespace detail
     static constexpr auto value = sizeof(typename T::inst_dtype);
   };
 
+  template <uint32_t dim, class Tensor_t>
+  static constexpr auto append_pvc_tensor(Tensor_t const &t0, uint32_t shape, uint32_t stride) {
+    return make_tensor(make_inttuple_iter(t0.data()), append(t0.layout(), make_layout(shape, E<dim>{} * stride)));
+  }
+
 } // namespace detail end
 
 template <class CopyOp,
-          class Indicator_MNK = detail::MKL_Indicator,
-          class GStride = cute::Stride<int64_t, cute::Int<1>, int64_t>>
+          class LayoutIndicator = detail::MKL_Indicator,
+          class GStride = std::conditional_t<std::is_same_v<LayoutIndicator, detail::MKL_Indicator>,
+                                             cute::Stride<int64_t, cute::Int<1>, int64_t>,
+                                             cute::Stride<cute::Int<1>, int64_t, int64_t>>>
 struct XE_2D_LD_Unpack {
   const void *base_ptr;
   uint32_t width;
@@ -99,9 +106,9 @@ struct XE_2D_LD_Unpack {
   
   using Shape_MN = CopyOp::Shape_MN;
 
-  static constexpr bool is_mkl = detail::is_MKL_layout<Indicator_MNK>::value;
-  static constexpr bool is_nkl = detail::is_NKL_layout<Indicator_MNK>::value;
-  static constexpr bool is_transpose = detail::is_transpose_load<Indicator_MNK, GStride>::value;
+  static constexpr bool is_mkl = detail::is_MKL_layout<LayoutIndicator>::value;
+  static constexpr bool is_nkl = detail::is_NKL_layout<LayoutIndicator>::value;
+  static constexpr bool is_transpose = detail::is_transpose_load<LayoutIndicator, GStride>::value;
 
   static_assert(is_mkl != is_nkl);
 
@@ -124,7 +131,7 @@ struct XE_2D_LD_Unpack {
 
   XE_2D_LD_Unpack() {}
 
-  using Traits_LD_t = Copy_Traits<CopyOp, Indicator_MNK, GStride>;
+  using Traits_LD_t = Copy_Traits<CopyOp, LayoutIndicator, GStride>;
 
   template <class TS, class SLayout, class TD, class DLayout>
   CUTE_HOST_DEVICE friend constexpr void
@@ -180,43 +187,17 @@ struct XE_2D_LD_Unpack {
     auto R = rank(GShape{});
     static_assert(R == 3, "mismatch rank");
 
-    auto t_shape = cute::tuple_cat(make_shape(_1{}), take<1, R>(shape));
+    using basis_t =  make_seq<rank(typename CopyOp::Shape_MN{})>;
+    using rvs_basis_t = decltype(reverse(basis_t{}));
+    using use_basis_t = std::conditional_t<is_mkl, basis_t, rvs_basis_t>;
 
-    auto basis =  make_seq<rank(typename CopyOp::Shape_MN{})>{};
-     
-    if constexpr (is_mkl) {
-      if constexpr (!is_transpose) {
-        auto t_stride =  cute::tuple_cat(make_stride(_1{}), transform(basis, typename CopyOp::Shape_MN{},
-                                                                      [&](auto i, auto s){
-                                                                        return E<i>{} * s;
-                                                                      }));
-        return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord, l_coord)),
-                          make_layout(t_shape, t_stride));
-      } else {
-        auto t_stride =  cute::tuple_cat(make_stride(_1{}), transform((basis), typename CopyOp::Shape_MN{},
-                                                                      [&](auto i, auto s){
-                                                                        return E<i>{} * s;
-                                                                      }));
-        return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord,  l_coord)),
-                          make_layout(t_shape, t_stride));
-      }
-    } else if constexpr (is_nkl) {
-      if constexpr (!is_transpose) {
-        auto t_stride =  cute::tuple_cat(make_stride(_1{}), transform(reverse(basis), typename CopyOp::Shape_MN{},
-                                                                      [&](auto i, auto s){
-                                                                        return E<i>{} * s;
-                                                                      }));
-        return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord, l_coord)),
-                          make_layout(t_shape, t_stride));
-      } else {
-        auto t_stride =  cute::tuple_cat(make_stride(_1{}), transform(reverse(basis), typename CopyOp::Shape_MN{},
-                                                                      [&](auto i, auto s){
-                                                                        return E<i>{} * s;
-                                                                      }));
-        return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord,  l_coord)),
-                          make_layout(t_shape, t_stride));
-      }
-    }
+    auto new_shape = cute::tuple_cat(make_shape(_1{}), take<1, R>(shape));
+    auto new_stride =  cute::tuple_cat(make_stride(_1{}), transform(use_basis_t{}, typename CopyOp::Shape_MN{},
+                                                                  [&](auto i, auto s){
+                                                                      return E<i>{} * s;
+                                                                  }));
+    return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord, l_coord)),
+                       make_layout(new_shape, new_stride));
   }
 
   template <class T1, class T2, class... TraitsArgs>

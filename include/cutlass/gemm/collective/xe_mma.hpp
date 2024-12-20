@@ -126,23 +126,16 @@ struct CollectiveMma<
   using PrefetchBTileSize = decltype(ceil_div(Shape<Int<SG_K>, Int<SG_N>>{},PrefetchBThrShape{}));
   
   static constexpr uint32_t MaxThreadsPerBlock = size(TiledMma{});
+
   using traits_load_A = Copy_Traits<GmemTiledCopyA, cute::detail::MKL_Indicator, StrideA>;
   using atom_load_A = Copy_Atom<traits_load_A, ElementA>;
-  using XE_Copy_A = decltype(make_tiled_copy(atom_load_A{}
-                                            .with(static_cast<ElementA const*>(nullptr), int32_t(0), int32_t(0), int32_t(0)), 
-                                            Layout<Shape<_1, Int<SubgroupSize>>>{},
-                                            make_layout(make_shape(get<0>(typename traits_load_A::Shape_MN{}),
-                                                                   get<1>(typename traits_load_A::Shape_MN{}) / Int<SubgroupSize>{}))));
+
   using traits_load_B = Copy_Traits<GmemTiledCopyB, cute::detail::NKL_Indicator, StrideB>;
   using atom_load_B = Copy_Atom<traits_load_B, ElementB>;
-  using XE_Copy_B = decltype(make_tiled_copy(atom_load_B{}
-                                            .with(static_cast<ElementB const*>(nullptr), int32_t(0), int32_t(0), int32_t(0)),
-                                            Layout<Shape<_1, Int<SubgroupSize>>>{},
-                                            make_layout(make_shape(get<0>(typename traits_load_B::Shape_MN{}),
-                                                                   get<1>(typename traits_load_B::Shape_MN{}) / Int<SubgroupSize>{}))));
 
   using XE_Prefetch_A = decltype(cute::detail::prefetch_selector<PrefetchATileSize, ElementA>());
   using XE_Prefetch_B = decltype(cute::detail::prefetch_selector<PrefetchBTileSize, ElementB>());
+
   // Host side kernel arguments
   struct Arguments {
     ElementA const* ptr_A;
@@ -152,8 +145,10 @@ struct CollectiveMma<
   };
 
   struct Params {
-    XE_Copy_A gmem_tiled_copy_a;
-    XE_Copy_B gmem_tiled_copy_b;
+    int M;
+    int N;
+    int K;
+    Arguments args;
     XE_Prefetch_A gmem_prefetch_a;
     XE_Prefetch_B gmem_prefetch_b;
   };
@@ -168,26 +163,11 @@ struct CollectiveMma<
   static constexpr Params
   to_underlying_arguments(ProblemShape const& problem_shape, Arguments const& args, void* workspace) {
     (void) workspace;
+    auto [M, N, K, L] = problem_shape;
 
-    auto problem_shape_MNKL = append<4>(problem_shape, 1);
-    auto [M,N,K,L] = problem_shape_MNKL;
-
-    XE_Copy_A copyA = make_tiled_copy(Copy_Atom<Copy_Traits<GmemTiledCopyA, cute::detail::MKL_Indicator, StrideA>, ElementA>{}.with(args.ptr_A, M, K),
-                                      Layout<Shape<_1, Int<SubgroupSize>>>{},
-                                      make_layout(make_shape(get<0>(typename traits_load_A::Shape_MN{}),
-                                                             get<1>(typename traits_load_A::Shape_MN{}) / Int<SubgroupSize>{})));
-    XE_Copy_B copyB = make_tiled_copy(Copy_Atom<Copy_Traits<GmemTiledCopyB, cute::detail::NKL_Indicator, StrideB>, ElementB>{}.with(args.ptr_B, N, K),
-                                      Layout<Shape<_1, Int<SubgroupSize>>>{},
-                                      make_layout(make_shape(get<0>(typename traits_load_B::Shape_MN{}),
-                                                             get<1>(typename traits_load_B::Shape_MN{}) / Int<SubgroupSize>{})));
     XE_Prefetch_A prefetchA = cute::detail::prefetch_selector<PrefetchATileSize,ElementA>((void *)args.ptr_A, K, M, K);
     XE_Prefetch_B prefetchB = cute::detail::prefetch_selector<PrefetchBTileSize,ElementB>((void *)args.ptr_B, N, K, N);
-    return Params{copyA, copyB, prefetchA, prefetchB};
-  }
-
-  template <class Tensor_t>
-  static constexpr auto append_pvc_tensor_with_k(Tensor_t const &t0, uint32_t k_shape, uint32_t k_stride) {
-    return make_tensor(make_inttuple_iter(t0.data()), append(t0.layout(), make_layout(k_shape, E<1>{} * k_stride)));
+    return Params{M, N, K, args, prefetchA, prefetchB};
   }
 
   /// Perform a subgroup-scoped matrix multiply-accumulate
@@ -211,7 +191,7 @@ struct CollectiveMma<
       KTileIterator k_tile_iter, int k_tile_count,
       ResidueMNK residue_mnk,
       BlkCoord const &blk_coord,
-      int const &K,
+      int const &K_start,
       int thread_idx,
       char *smem_buf,
       Params const& mainloop) 
@@ -223,20 +203,35 @@ struct CollectiveMma<
     (void)thread_idx;
     (void)smem_buf;
 
+    auto M = mainloop.M;
+    auto N = mainloop.N;
+    auto K = mainloop.K;
+
+    auto gmem_tiled_copy_a = make_tiled_copy(atom_load_A{}.with(mainloop.args.ptr_A, M, K),
+                                             Layout<Shape<_1, Int<SubgroupSize>>>{},
+                                             make_layout(make_shape(get<0>(typename atom_load_A::Shape_MN{}),
+                                                                    get<1>(typename atom_load_A::Shape_MN{}) / Int<SubgroupSize>{})));
+    auto gmem_tiled_copy_b = make_tiled_copy(atom_load_B{}.with(mainloop.args.ptr_B, N, K),
+                                             Layout<Shape<_1, Int<SubgroupSize>>>{},
+                                             make_layout(make_shape(get<0>(typename atom_load_B::Shape_MN{}),
+                                                                    get<1>(typename atom_load_B::Shape_MN{}) / Int<SubgroupSize>{})));
+
     // Instantiate the MMA object
     TiledMma tiled_mma;
     auto thread_mma = tiled_mma.get_slice(thread_idx);
+
     Tensor tCrA_partition = thread_mma.partition_fragment_A(gA(_, _, 0));
-    Tensor tCrA = make_tensor(static_cast<decltype(tCrA_partition) &&>(tCrA_partition).data(),
-                              tCrA_partition.shape());
     Tensor tCrB_partition = thread_mma.partition_fragment_B(gB(_, _, 0));
+
+    // Partition the copying of A and B tiles across the threads
+    auto gmem_thr_copy_A = gmem_tiled_copy_a.get_slice(thread_idx);
+    auto gmem_thr_copy_B = gmem_tiled_copy_b.get_slice(thread_idx);
+
+    Tensor tCrA = make_tensor(static_cast<decltype(tCrA_partition) &&>(tCrA_partition).data(), tCrA_partition.shape());
     Tensor tCrB = make_tensor(static_cast<decltype(tCrB_partition) &&>(tCrB_partition).data(),
-                              make_shape(size<0>(tCrB_partition.shape()),
+                               make_shape(size<0>(tCrB_partition.shape()),
                                          size<2>(tCrB_partition.shape()),
                                          size<1>(tCrB_partition.shape())));
-    // Partition the copying of A and B tiles across the threads
-    auto gmem_thr_copy_A = mainloop.gmem_tiled_copy_a.get_slice(thread_idx);
-    auto gmem_thr_copy_B = mainloop.gmem_tiled_copy_b.get_slice(thread_idx);
 
     auto tCrA_copy_view = gmem_thr_copy_A.retile_D(tCrA);
     auto tCrB_copy_view = gmem_thr_copy_B.retile_D(tCrB);
@@ -262,7 +257,7 @@ struct CollectiveMma<
         print(" PrefetchATileSize :    ");print(PrefetchATileSize{});print("\n");
         print(" PrefetchBTileSize :    ");print(PrefetchBTileSize{});print("\n");
       }
-    #endif
+ #endif
 
     //
     // Mainloop
@@ -277,13 +272,13 @@ struct CollectiveMma<
   #endif
     const int l_coord = l_idx;
 
-    Tensor block2d_copy_iter_a = mainloop.gmem_tiled_copy_a.get_pvc_tensor(m_coord, 0, l_coord, tCrA_copy_view.shape());
-    auto copy_iter_a = append_pvc_tensor_with_k(block2d_copy_iter_a, k_tile_count, BLK_K);
+    Tensor block2d_copy_iter_a = gmem_tiled_copy_a.get_pvc_tensor(m_coord, 0, l_coord, tCrA_copy_view.shape());
+    auto copy_iter_a = append_pvc_tensor<1>(block2d_copy_iter_a, k_tile_count, BLK_K);
 
-    Tensor block2d_copy_iter_b = mainloop.gmem_tiled_copy_b.get_pvc_tensor(n_coord, 0, l_coord, tCrB_copy_view.shape());
-    auto copy_iter_b = append_pvc_tensor_with_k(block2d_copy_iter_b, k_tile_count, BLK_K);
+    Tensor block2d_copy_iter_b = gmem_tiled_copy_b.get_pvc_tensor(n_coord, 0, l_coord, tCrB_copy_view.shape());
+    auto copy_iter_b = append_pvc_tensor<1>(block2d_copy_iter_b, k_tile_count, BLK_K);
 
-    const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
+    const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K_start));
     int prefetch_k = 0;
 
     Tensor blocked_prefetch_iter_a = mainloop.gmem_prefetch_a.get_pvc_tensor(
@@ -291,37 +286,37 @@ struct CollectiveMma<
                                (k_start_idx + (get_sub_group_id() % ATOM_N) % get<1>(PrefetchAThrShape{})) * PrefetchStrideA,
                                l_coord,
                                make_shape(_1{}, _1{}, _1{}));
-    auto prefetch_iter_a = append_pvc_tensor_with_k(blocked_prefetch_iter_a, k_tile_count, BLK_K);
+    auto prefetch_iter_a = append_pvc_tensor<1>(blocked_prefetch_iter_a, k_tile_count, BLK_K);
 
     Tensor blocked_prefetch_iter_b = mainloop.gmem_prefetch_b.get_pvc_tensor(
                                (get_sub_group_id() / ATOM_N / get<1>(PrefetchBThrShape{}) + k_start_idx) * PrefetchStrideB,
                                n_coord + (get_sub_group_id() / ATOM_N) % get<1>(PrefetchBThrShape{}) * get<1>(PrefetchBTileSize{}),
                                l_coord,
                                make_shape(_1{}, _1{}, _1{}));
-    auto prefetch_iter_b = append_pvc_tensor_with_k(blocked_prefetch_iter_b, k_tile_count, BLK_K);
+    auto prefetch_iter_b = append_pvc_tensor<0>(blocked_prefetch_iter_b, k_tile_count, BLK_K);
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
       if constexpr(cute::detail::has_prefetch<GmemTiledCopyA>) {
-        prefetch(mainloop.gmem_tiled_copy_a, prefetch_iter_a(_,_,_,prefetch_k));
+        prefetch(gmem_tiled_copy_a, prefetch_iter_a(_,_,_,prefetch_k));
       }
       if constexpr(cute::detail::has_prefetch<GmemTiledCopyB>) {
-        prefetch(mainloop.gmem_tiled_copy_b, prefetch_iter_b(_,_,_,prefetch_k));  
+        prefetch(gmem_tiled_copy_b, prefetch_iter_b(_,_,_,prefetch_k));
       }
     }
 
     CUTLASS_PRAGMA_UNROLL
     for (int k_tile = 0, k = k_start_idx; k_tile < k_tile_count; ++k_tile, ++k, ++prefetch_k) {
       // Copy gmem to rmem for the first k_tile
-      copy(mainloop.gmem_tiled_copy_a, copy_iter_a(_,_,_,k), tCrA_copy_view);
-      copy(mainloop.gmem_tiled_copy_b, copy_iter_b(_,_,_,k), tCrB_copy_view);
+      copy(gmem_tiled_copy_a, copy_iter_a(_,_,_,k), tCrA_copy_view);
+      copy(gmem_tiled_copy_b, copy_iter_b(_,_,_,k), tCrB_copy_view);
 
       if(prefetch_k < k_tile_count) {
         if constexpr(cute::detail::has_prefetch<GmemTiledCopyA>) {
-          prefetch(mainloop.gmem_tiled_copy_a, prefetch_iter_a(_,_,_,prefetch_k));
+          prefetch(gmem_tiled_copy_a, prefetch_iter_a(_,_,_,prefetch_k));
         }
         if constexpr(cute::detail::has_prefetch<GmemTiledCopyB>) {
-          prefetch(mainloop.gmem_tiled_copy_b, prefetch_iter_b(_,_,_,prefetch_k));  
+          prefetch(gmem_tiled_copy_b, prefetch_iter_b(_,_,_,prefetch_k));
         } 
       }
 
