@@ -107,7 +107,7 @@ struct XE_2D_LD_Unpack {
 
   XE_2D_LD_Unpack(const void *ptr, uint32_t const &y,
                   uint32_t const &x, uint32_t const &p = 0) : base_ptr(ptr) {
-    if (is_nkl) {
+    if constexpr (is_nkl) {
       width = is_transpose ? x : y;
       height = is_transpose ? y : x;
       pitch = (p == 0 ? width : p);

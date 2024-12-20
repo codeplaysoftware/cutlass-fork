@@ -185,9 +185,9 @@ struct CollectiveMma<
     return Params{copyA, copyB, prefetchA, prefetchB};
   }
 
-  template <class Tensor_t, class Layout_t>
-  static constexpr auto append_pvc_tensor_with_layout(Tensor_t const &t0, Layout_t const & layout) {
-    return make_tensor(make_inttuple_iter(t0.data()), append(t0.layout(), layout));
+  template <class Tensor_t>
+  static constexpr auto append_pvc_tensor_with_k(Tensor_t const &t0, uint32_t k_shape, uint32_t k_stride) {
+    return make_tensor(make_inttuple_iter(t0.data()), append(t0.layout(), make_layout(k_shape, E<1>{} * k_stride)));
   }
 
   /// Perform a subgroup-scoped matrix multiply-accumulate
@@ -278,10 +278,10 @@ struct CollectiveMma<
     const int l_coord = l_idx;
 
     Tensor block2d_copy_iter_a = mainloop.gmem_tiled_copy_a.get_pvc_tensor(m_coord, 0, l_coord, tCrA_copy_view.shape());
-    auto copy_iter_a = append_pvc_tensor_with_layout(block2d_copy_iter_a, make_layout(make_shape(k_tile_count), make_stride(E<1>{} *BLK_K)));
+    auto copy_iter_a = append_pvc_tensor_with_k(block2d_copy_iter_a, k_tile_count, BLK_K);
 
     Tensor block2d_copy_iter_b = mainloop.gmem_tiled_copy_b.get_pvc_tensor(n_coord, 0, l_coord, tCrB_copy_view.shape());
-    auto copy_iter_b = append_pvc_tensor_with_layout(block2d_copy_iter_b, make_layout(make_shape(k_tile_count), make_stride(E<1>{} *BLK_K)));
+    auto copy_iter_b = append_pvc_tensor_with_k(block2d_copy_iter_b, k_tile_count, BLK_K);
 
     const int k_start_idx = crd2idx((*k_tile_iter), make_shape(K));
     int prefetch_k = 0;
@@ -291,14 +291,14 @@ struct CollectiveMma<
                                (k_start_idx + (get_sub_group_id() % ATOM_N) % get<1>(PrefetchAThrShape{})) * PrefetchStrideA,
                                l_coord,
                                make_shape(_1{}, _1{}, _1{}));
-    auto prefetch_iter_a = append_pvc_tensor_with_layout(blocked_prefetch_iter_a, make_layout(make_shape(k_tile_count), make_stride(E<1>{} *BLK_K)));
+    auto prefetch_iter_a = append_pvc_tensor_with_k(blocked_prefetch_iter_a, k_tile_count, BLK_K);
 
     Tensor blocked_prefetch_iter_b = mainloop.gmem_prefetch_b.get_pvc_tensor(
                                (get_sub_group_id() / ATOM_N / get<1>(PrefetchBThrShape{}) + k_start_idx) * PrefetchStrideB,
                                n_coord + (get_sub_group_id() / ATOM_N) % get<1>(PrefetchBThrShape{}) * get<1>(PrefetchBTileSize{}),
                                l_coord,
                                make_shape(_1{}, _1{}, _1{}));
-    auto prefetch_iter_b = append_pvc_tensor_with_layout(blocked_prefetch_iter_b, make_layout(make_shape(k_tile_count), make_stride(E<0>{} *BLK_K)));
+    auto prefetch_iter_b = append_pvc_tensor_with_k(blocked_prefetch_iter_b, k_tile_count, BLK_K);
 
     CUTLASS_PRAGMA_UNROLL
     for (int i = 0; i < DispatchPolicy::Stages; i++, prefetch_k++) {
