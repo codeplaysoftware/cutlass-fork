@@ -191,13 +191,24 @@ struct XE_2D_LD_Unpack {
     using rvs_basis_t = decltype(reverse(basis_t{}));
     using use_basis_t = std::conditional_t<is_mkl, basis_t, rvs_basis_t>;
 
-    auto new_shape = cute::tuple_cat(make_shape(_1{}), take<1, R>(shape));
-    auto new_stride =  cute::tuple_cat(make_stride(_1{}), transform(use_basis_t{}, typename CopyOp::Shape_MN{},
-                                                                  [&](auto i, auto s){
-                                                                      return E<i>{} * s;
-                                                                  }));
-    return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord, l_coord)),
-                       make_layout(new_shape, new_stride));
+    if constexpr (is_mkl) {
+      auto new_shape = cute::tuple_cat(make_shape(_1{}), take<R - 2, R>(shape));
+      auto new_stride = cute::tuple_cat(make_stride(_1{}), transform(basis_t{}, typename CopyOp::Shape_MN{},
+                                                                    [&](auto i, auto s){
+                                                                        return E<i>{} * s;
+                                                                    }));
+      return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord, l_coord)),
+                         make_layout(new_shape, new_stride));
+
+    } else {
+      auto new_shape = cute::tuple_cat(make_shape(_1{}), (take<R - 2, R>(shape)));
+      auto new_stride = cute::tuple_cat(make_stride(_1{}), transform(basis_t{}, reverse(typename CopyOp::Shape_MN{}),
+                                                                    [&](auto i, auto s){
+                                                                        return E<i>{} * s;
+                                                                    }));
+      return make_tensor(make_inttuple_iter(make_coord(m_coord, n_coord, l_coord)),
+                         make_layout(new_shape, new_stride));
+    }
   }
 
   template <class T1, class T2, class... TraitsArgs>
@@ -1997,5 +2008,91 @@ namespace detail
     }
   }
 } // end namespace detail
+
+template <class TiledCopy, class ThrIdx>
+struct Xe2DThrCopy : ThrCopy<TiledCopy, ThrIdx> {
+
+  CUTE_HOST_DEVICE
+  Xe2DThrCopy(ThrIdx const& thr_idx) : ThrCopy<TiledCopy, ThrIdx> (thr_idx) {}
+
+  template <class DTensor>
+  CUTE_HOST_DEVICE
+  auto
+  retile_D(DTensor&& dtensor) {
+    if constexpr (TiledCopy::is_nkl) {
+      return retile_B(dtensor);
+    } else {
+      return retile_A(dtensor);
+    }
+  }
+
+  template <class DTensor>
+  CUTE_HOST_DEVICE static
+  auto
+  retile_A(DTensor&& dtensor) {
+    auto tmp = ThrCopy<TiledCopy, ThrIdx>::retile_D(dtensor);
+    return make_tensor(static_cast<decltype(tmp) &&>(tmp).data(),
+                           tmp.shape());
+  }
+
+  template <class DTensor>
+  CUTE_HOST_DEVICE static
+  auto
+  retile_B(DTensor&& dtensor) {
+    auto b_tensor = make_tensor(dtensor.data(),
+                               make_shape(size<0>(dtensor.shape()),
+                                         size<2>(dtensor.shape()),
+                                         size<1>(dtensor.shape())));
+    auto tmp = ThrCopy<TiledCopy, ThrIdx>::retile_D(b_tensor);
+    return make_tensor(static_cast<decltype(tmp) &&>(tmp).data(),
+                       make_shape(size<0>(tmp.shape()),
+                                  size<2>(tmp.shape()),
+                                  size<1>(tmp.shape())));
+  }
+};
+
+template <class Copy_Atom,
+          class LayoutCopy_TV,  // (tid,vid) -> coord   [Need not be 2D...]
+          class ShapeTiler_MN>  // coord space
+struct Xe2DTiledCopy : TiledCopy<Copy_Atom, LayoutCopy_TV, ShapeTiler_MN>{
+
+  template <class ThrIdx,
+            __CUTE_REQUIRES(is_integral<ThrIdx>::value)>
+  CUTE_HOST_DEVICE
+  auto
+  get_slice(ThrIdx const& thr_idx)
+  {
+    return Xe2DThrCopy<Xe2DTiledCopy, ThrIdx>(thr_idx);
+  }
+};
+
+template <class... Args,
+          class ThrLayout,
+          class ValLayout = Layout<_1>>
+CUTE_HOST_DEVICE
+auto
+make_xe_2d_copy(Copy_Atom<Args...> const& copy_atom,
+                ThrLayout          const& thr_layout = {},     // (m,n) -> thr_idx
+                ValLayout          const& val_layout = {})     // (m,n) -> val_idx
+{
+  // Take the raked_products to compute the Layout_MN
+  // (M,N) -> (thr_idx, val_idx)
+  auto layout_mn = raked_product(thr_layout, val_layout);
+  // (thr_idx, val_idx) -> (M,N)
+  auto layout_tv = right_inverse(layout_mn).with_shape(make_shape(size(thr_layout), size(val_layout)));
+  // Tiler for extracting relevant elements
+  // (M,N) -> tensor coord
+  auto tiler = product_each(shape(layout_mn));
+
+#if 0
+  print("thr_layout: "); print(thr_layout); print("\n");
+  print("val_layout: "); print(val_layout); print("\n");
+  print("layout_mn : "); print(layout_mn);  print("\n");
+  print("layout_tv : "); print(layout_tv);  print("\n");
+  print("tiler     : "); print(tiler);      print("\n");
+#endif
+
+  return Xe2DTiledCopy<Copy_Atom<Args...>, decltype(layout_tv), decltype(tiler)>{copy_atom};
+}
 
 } // end namespace cute
