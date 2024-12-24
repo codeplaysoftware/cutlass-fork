@@ -415,6 +415,81 @@ gemm(MMA_Atom<MMA>       const& mma,
   }
 }
 
+#if defined(SYCL_INTEL_TARGET)
+// Dispatch [6]: (V,M,K) x (V,N,K) => (V,M,N) which is extended for intel xe
+template <class ATraits,
+          class BTraits,
+          class MMA,
+          class TD, class DLayout,
+          class TA, class ALayout,
+          class TB, class BLayout,
+          class TC, class CLayout,
+          __CUTE_REQUIRES(DLayout::rank == 3 && is_rmem<TD>::value &&
+                          ALayout::rank == 3 && is_rmem<TA>::value &&
+                          BLayout::rank == 3 && is_rmem<TB>::value &&
+                          CLayout::rank == 3 && is_rmem<TC>::value)>
+CUTE_HOST_DEVICE
+void
+gemm(MMA_Atom<MMA>       const& mma,
+     Tensor<TD, DLayout>      & D,  // (V,M,N) Logical data
+     Tensor<TA, ALayout> const& A,  // (V,M,K) Logical data
+     Tensor<TB, BLayout> const& B,  // (V,N,K) Logical data
+     Tensor<TC, CLayout> const& C)  // (V,M,N) Logical data
+{
+  static constexpr auto m = decltype(size<1>(A.shape()))::value;
+  static constexpr auto k = decltype(size<2>(A.shape()))::value;
+  static constexpr auto n = decltype(size<1>(B.shape()))::value;
+
+  static constexpr auto m_step = size<0>(typename ATraits::Shape_MN{}) / size<0>(typename MMA_Atom<MMA>::Shape_MNK{});
+  static constexpr auto A_k_step = size<1>(typename ATraits::Shape_MN{}) / size<1>(typename MMA_Atom<MMA>::Shape_MNK{});
+  static constexpr auto B_k_step = size<0>(typename BTraits::Shape_MN{}) / size<1>(typename MMA_Atom<MMA>::Shape_MNK{});
+
+  auto retiled_a = make_tensor(A.data(),
+                               make_shape(size<0>(A.shape()),
+                                          Int<m_step>{},
+                                          Int<A_k_step>{},
+                                          Int<m / m_step>{},
+                                          Int<k / A_k_step>{}));
+  auto retiled_b = make_tensor(B.data(),
+                               make_shape(size<0>(B.shape()),
+                                          Int<B_k_step>{},
+                                          size<1>(B.shape()),
+                                          Int<k / B_k_step>{}));
+  auto retiled_c = make_tensor(C.data(),
+                               make_shape(size<0>(C.shape()),
+                                          Int<m_step>{},
+                                          Int<m / m_step>{},
+                                          size<2>(C.shape())));
+  auto retiled_d = make_tensor(D.data(),
+                               make_shape(size<0>(D.shape()),
+                                          Int<m_step>{},
+                                          Int<m / m_step>{},
+                                          size<2>(D.shape())));
+
+#if 0
+  if (cutlass::thread0()) {
+    print("======================= retile: \n");
+    print("  retiled_a : "); print(retiled_a); print("\n");
+    print("  retiled_b : "); print(retiled_b); print("\n");
+    print("  retiled_c : "); print(retiled_c); print("\n");
+    print("  retiled_d : "); print(retiled_d); print("\n");
+  }
+#endif
+
+  CUTE_UNROLL
+  for (int m_i = 0; m_i < (m / m_step); ++m_i) {
+    CUTE_UNROLL
+    for (int k_i = 0; k_i < k; ++k_i) {
+      gemm(mma,
+           retiled_d(_, _, m_i, _),
+           retiled_a(_, _, k_i % A_k_step, m_i, k_i / A_k_step),
+           retiled_b(_, k_i % B_k_step, _, k_i / B_k_step),
+           retiled_c(_, _, m_i, _));
+    }
+  }
+}
+#endif
+
 //
 // Thread-Local Shared-Memory GEMMs
 //

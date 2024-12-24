@@ -120,13 +120,13 @@ public:
 
   using Trait_C = Copy_Traits<GmemTiledCopyC>;
   using XE_Copy_C = decltype(make_tiled_copy(Copy_Atom<Trait_C, ElementC>{}
-                                             .with(static_cast<ElementC const*>(nullptr), int32_t(0), int32_t(0), int32_t(0)),
+                                             .with(static_cast<ElementC const*>(nullptr), int32_t(0), int32_t(0)),
                                              Layout<Shape<_1, Int<SubgroupSize>>>{},
                                              make_layout(make_shape(get<0>(typename Trait_C::Shape_MN{}),
                                                                     get<1>(typename Trait_C::Shape_MN{}) / Int<SubgroupSize>{}))));
   using Trait_D = Copy_Traits<GmemTiledCopyD>;
   using XE_Copy_D = decltype(make_tiled_copy(Copy_Atom<Trait_D, ElementD>{}
-                                             .with(static_cast<ElementD const*>(nullptr),int32_t(0), int32_t(0), int32_t(0)),
+                                             .with(static_cast<ElementD const*>(nullptr),int32_t(0), int32_t(0)),
                                              Layout<Shape<_1, Int<SubgroupSize>>>{},
                                              make_layout(make_shape(get<0>(typename Trait_D::Shape_MN{}),
                                                                     get<1>(typename Trait_D::Shape_MN{}) / Int<SubgroupSize>{}))));
@@ -188,7 +188,7 @@ public:
     XE_Copy_C xe_load_c = {};
     if constexpr (is_source_supported) {
       xe_load_c = make_tiled_copy(Copy_Atom<Copy_Traits<CopyOpG2R>, ElementC>{}.with(
-                                  args.ptr_C, N, M, N),
+                                  args.ptr_C, M, N),
                                   Layout<Shape<_1, Int<SubgroupSize>>>{},
                                   make_layout(make_shape(get<0>(typename Trait_C::Shape_MN{}),
                                                          get<1>(typename Trait_C::Shape_MN{}) / Int<SubgroupSize>{})));
@@ -197,7 +197,7 @@ public:
     XE_Copy_D xe_store_d = {};
     if constexpr (is_destination_supported) {
       xe_store_d = make_tiled_copy(Copy_Atom<Copy_Traits<CopyOpR2G>, ElementD>{}.with(
-                                   args.ptr_D, N, M, N),
+                                   args.ptr_D, M, N),
                                    Layout<Shape<_1, Int<SubgroupSize>>>{},
                                    make_layout(make_shape(get<0>(typename Trait_D::Shape_MN{}),
                                                           get<1>(typename Trait_D::Shape_MN{}) / Int<SubgroupSize>{})));
@@ -295,12 +295,10 @@ public:
 
     Tensor trC = make_tensor<typename TiledMma::ValTypeC>(Shape<Int<FragmentSize>>{});
     Tensor trD = make_tensor<typename TiledMma::ValTypeD>(Shape<Int<FragmentSize>>{});
-    Tensor tOuti = params.xe_store_d.get_pvc_tensor(
-            make_coord(m_offset, n_offset, 0),
-            make_shape(_, Int<FragsM>{}, Int<FragsN>{}, L),
-            make_stride(Int<get<0>(MmaAtomShape{})>{}, Int<get<1>(MmaAtomShape{})>{}, _1{}));
+    Tensor rw_coord = params.xe_store_d.get_pvc_tensor(
+            m_offset, n_offset, l_offset,
+            make_shape(_, Int<FragsM>{}, Int<FragsN>{}));
 
-    Tensor rw_coord = tOuti(_,_,_,l_coord);
     Tensor mD_crd = make_identity_tensor(make_shape(M,N));
     Tensor cD = local_tile(mD_crd, take<0,2>(SubgroupTileShape{}), make_coord(m_coord, n_coord));
     // Get the fusion callbacks

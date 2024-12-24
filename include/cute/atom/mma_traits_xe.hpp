@@ -31,12 +31,16 @@
 #pragma once
 
 #include <cute/arch/mma_xe.hpp>
+#include <cute/atom/mma_atom.hpp>
 #include <cute/atom/mma_traits.hpp>
 
 #include <cute/layout.hpp>
 
 namespace cute
 {
+template <class... Args>
+struct MMA_Atom;
+
 template <>
 struct MMA_Traits<XE_8x16x16_F32BF16BF16F32_TT>
 {
@@ -341,5 +345,116 @@ struct MMA_Traits<XE_1x16x8_F32TF32TF32F32_TT>
   using BLayout = Layout<Shape<_16, _8>, Stride<_1, _16>>;
   using CLayout = Layout<Shape<_16, _1>, Stride<_1, _1>>;
 };
+
+template <class MMA, class ThrCoord>
+struct ThrMMA;
+
+template <class XeMMA,
+          class ThrVMNK>
+struct XeThrMMA  {
+  ThrMMA<XeMMA, ThrVMNK> thr_mma;
+
+  CUTE_HOST_DEVICE
+  XeThrMMA(XeMMA const& mma, ThrVMNK const& vmnk) {
+    thr_mma = ThrMMA<XeMMA, ThrVMNK>{mma, vmnk};
+  }
+
+  template <class ATensor>
+  CUTE_HOST_DEVICE constexpr
+  auto
+  partition_fragment_A(ATensor&& atensor) const
+  {
+    return thr_mma.partition_fragment_A(atensor);
+  }
+
+  template <class BTensor>
+  CUTE_HOST_DEVICE constexpr
+  auto
+  partition_fragment_B(BTensor&& btensor) const
+  {
+    return  thr_mma.partition_fragment_B(btensor);
+  }
+
+  template <class BTensor>
+  CUTE_HOST_DEVICE constexpr
+  auto
+  partition_fragment_C(BTensor&& ctensor) const
+  {
+    return  thr_mma.partition_fragment_C(ctensor);
+  }
+};
+
+template <class MMA_Atom,
+          class AtomLayoutMNK,
+          class PermutationMNK>
+struct TiledMMA;
+
+template <class MMA_Atom,
+          class AtomLayoutMNK,
+          class PermutationMNK = Tile<Underscore,Underscore,Underscore>>
+struct XeTiledMMA : TiledMMA<MMA_Atom, AtomLayoutMNK, PermutationMNK> {
+
+  CUTE_HOST_DEVICE constexpr
+  XeTiledMMA(MMA_Atom const& mma_atom = {}, AtomLayoutMNK const& thr_layout_mnk = {})
+            : TiledMMA<MMA_Atom, AtomLayoutMNK, PermutationMNK>(mma_atom, thr_layout_mnk)
+  {}
+
+  template <class ThrIdx,
+            __CUTE_REQUIRES(is_integral<ThrIdx>::value)>
+  CUTE_HOST_DEVICE constexpr
+  auto
+  get_slice(ThrIdx const& thr_idx) const
+  {
+    auto thr_vmnk = this->thr_layout_vmnk_.get_flat_coord(thr_idx);
+    return XeThrMMA<XeTiledMMA, decltype(thr_vmnk)>{*this, thr_vmnk};
+  }
+
+  template <class ThrIdx,
+            __CUTE_REQUIRES(is_integral<ThrIdx>::value)>
+  CUTE_HOST_DEVICE constexpr
+  auto
+  get_thread_slice(ThrIdx const& thr_idx) const
+  {
+    return get_slice(thr_idx);
+  }
+};
+
+template <class MMA_Op,
+          class MMAThrLayout = Layout<Shape<_1,_1,_1>>,
+          class Permutations = Tile<Underscore,Underscore,Underscore>>
+CUTE_HOST_DEVICE constexpr
+auto
+make_xe_tiled_mma(MMA_Atom<MMA_Op> const& mma_atom,
+               MMAThrLayout     const& thr_layout   = {},
+               Permutations     const& permutations = {})
+{
+  auto thr_layout_mnk  = append<3>(thr_layout, Layout<_1,_0>{});
+  auto permutation_mnk = append<3>(permutations, _);
+
+  return XeTiledMMA<MMA_Atom<MMA_Op>,
+                  decltype(thr_layout_mnk),
+                  decltype(permutation_mnk)>{mma_atom, thr_layout_mnk};
+}
+
+template <class MMA_Op,
+          class MMAThrLayout = Layout<Shape<_1,_1,_1>>,
+          class Permutations = Tile<Underscore,Underscore,Underscore>>
+CUTE_HOST_DEVICE constexpr
+auto
+make_xe_tiled_mma(MMA_Op const&,
+               MMAThrLayout const& thr_layout   = {},
+               Permutations const& permutations = {})
+{
+  // Attempt to wrap in an MMA_Atom<> and forward
+  return make_xe_tiled_mma(MMA_Atom<MMA_Op>{}, thr_layout, permutations);
+}
+
+template <int... I, class... Args>
+CUTE_HOST_DEVICE constexpr
+auto
+size(XeTiledMMA<Args...> const& mma)
+{
+  return size<I...>(mma.get_thr_layout_vmnk());
+}
 
 }
