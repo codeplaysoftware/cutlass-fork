@@ -375,6 +375,13 @@ struct XeThrMMA  {
     return  thr_mma.partition_fragment_B(btensor);
   }
 
+  template <class BTensor>
+  CUTE_HOST_DEVICE constexpr
+  auto
+  partition_fragment_C(BTensor&& ctensor) const
+  {
+    return  thr_mma.partition_fragment_C(ctensor);
+  }
 };
 
 template <class MMA_Atom,
@@ -402,6 +409,14 @@ struct XeTiledMMA : TiledMMA<MMA_Atom, AtomLayoutMNK, PermutationMNK> {
     return XeThrMMA<XeTiledMMA, decltype(thr_vmnk)>{*this, thr_vmnk};
   }
 
+  template <class ThrIdx,
+            __CUTE_REQUIRES(is_integral<ThrIdx>::value)>
+  CUTE_HOST_DEVICE constexpr
+  auto
+  get_thread_slice(ThrIdx const& thr_idx) const
+  {
+    return get_slice(thr_idx);
+  }
 };
 
 template <class MMA_Op,

@@ -415,6 +415,7 @@ gemm(MMA_Atom<MMA>       const& mma,
   }
 }
 
+#if defined(SYCL_INTEL_TARGET)
 // Dispatch [6]: (V,M,K) x (V,N,K) => (V,M,N) which is extended for intel xe
 template <class ATraits,
           class BTraits,
@@ -466,7 +467,7 @@ gemm(MMA_Atom<MMA>       const& mma,
                                           size<2>(D.shape())));
 
 #if 0
-  if (thread0()) {
+  if (cutlass::thread0()) {
     print("======================= retile: \n");
     print("  retiled_a : "); print(retiled_a); print("\n");
     print("  retiled_b : "); print(retiled_b); print("\n");
@@ -487,6 +488,7 @@ gemm(MMA_Atom<MMA>       const& mma,
     }
   }
 }
+#endif
 
 //
 // Thread-Local Shared-Memory GEMMs

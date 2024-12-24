@@ -649,6 +649,8 @@ struct XE_2D_U32x16x8_LD_T {
 };
 
 struct XE_2D_U32x1x16_ST_N {
+  using Shape_MN = Shape<_1, _16>;
+
   template <class T>
   CUTE_HOST_DEVICE static void copy(void *baseoffset, int width, int height,
                                     int pitch, intel::coord_t coord,
@@ -665,6 +667,8 @@ struct XE_2D_U32x1x16_ST_N {
 };
 
 struct XE_2D_U32x2x16_ST_N {
+  using Shape_MN = Shape<_2, _16>;
+
   template <class T>
   CUTE_HOST_DEVICE static void copy(void *baseoffset, int width, int height,
                                     int pitch, intel::coord_t coord,
@@ -681,6 +685,8 @@ struct XE_2D_U32x2x16_ST_N {
 };
 
 struct XE_2D_U32x4x16_ST_N {
+  using Shape_MN = Shape<_4, _16>;
+
   template <class T>
   CUTE_HOST_DEVICE static void copy(void *baseoffset, int width, int height,
                                     int pitch, intel::coord_t coord,
@@ -697,6 +703,8 @@ struct XE_2D_U32x4x16_ST_N {
 };
 
 struct XE_2D_U32x8x16_ST_N {
+  using Shape_MN = Shape<_8, _16>;
+
   template <class T>
   CUTE_HOST_DEVICE static void copy(void *baseoffset, int width, int height,
                                     int pitch, intel::coord_t coord,

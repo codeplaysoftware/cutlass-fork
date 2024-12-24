@@ -29,19 +29,26 @@
  *
  **************************************************************************************************/
 
+#pragma once
+
 #include "gemm_utils.hpp"
+
+using namespace cutlass::detail;
+using namespace cute::detail;
 
 template <uint32_t wg_m, uint32_t wg_n, uint32_t sg_m, uint32_t sg_n,
           uint32_t sg_k, class dtype_a, class dtype_b, class dtype_c,
           class traits_a, class traits_b, class traits_c,
-          class traits_mma = XE_8x16x16_F32BF16BF16F32_TT>
-struct gemm_device_partition_sd {
+          class traits_mma = XE_8x16x16_F32BF16BF16F32_TT,
+          class layout_a = RowMajor,
+          class layout_b = RowMajor>
+struct gemm_device_partition_fragment_abc {
   using TA = dtype_a;
   using TB = dtype_b;
   using TC = dtype_c;
 
-  static constexpr bool is_a_row_major = true;
-  static constexpr bool is_b_row_major = true;
+  static constexpr bool is_a_row_major = std::is_same_v<layout_a, RowMajor>;
+  static constexpr bool is_b_row_major = std::is_same_v<layout_b, RowMajor>;;
 
   static constexpr uint32_t wg_tile_m = wg_m;
   static constexpr uint32_t wg_tile_n = wg_n;
@@ -51,6 +58,7 @@ struct gemm_device_partition_sd {
 
   static void func(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
                    uint32_t k) {
+    using namespace cute;
 
     // Represent the full tensors
     Tensor mA = make_tensor(make_gmem_ptr(A),
@@ -69,64 +77,51 @@ struct gemm_device_partition_sd {
     Tensor gB = local_tile(mB, cta_tiler, cta_coord, Step<X, _1, _1>{});
     Tensor gC = local_tile(mC, cta_tiler, cta_coord, Step<_1, _1, X>{});
 
-    auto sg_per_wg_x = wg_tile_n / sg_tile_n;
-    auto sg_id = get_sub_group_id();
-    Tensor sgA = local_tile(
-        gA, make_shape(Int<sg_tile_m>{}, Int<sg_tile_k>{}, k / sg_tile_k),
-        sg_id / sg_per_wg_x);
-    Tensor sgB = local_tile(
-        gB, make_shape(Int<sg_tile_n>{}, Int<sg_tile_k>{}, k / sg_tile_k),
-        sg_id % sg_per_wg_x);
-    Tensor sgC =
-        local_tile(gC, make_shape(Int<sg_tile_m>{}, Int<sg_tile_n>{}),
-                   make_coord(sg_id / sg_per_wg_x, sg_id % sg_per_wg_x));
-
-    using traits_load_A = Copy_Traits<traits_a>;
+    using traits_load_A = Copy_Traits<traits_a, MKL_Indicator, TagToStrideA_t<layout_a>>;
     using atom_load_A = Copy_Atom<traits_load_A, TA>;
-    TiledCopy copy_a = make_xe_2d_copy(
+    auto copy_a = make_xe_2d_copy(
         atom_load_A{}.with(A, m, k), Layout<Shape<_1, Int<SUBGROUP_SIZE>>>{},
         make_layout(make_shape(get<0>(typename traits_load_A::Shape_MN{}),
                                get<1>(typename traits_load_A::Shape_MN{}) /
                                    Int<SUBGROUP_SIZE>{})));
 
-    using traits_load_B = Copy_Traits<traits_b, NKL_Indicator>;
+    using traits_load_B = Copy_Traits<traits_b, cute::detail::NKL_Indicator, TagToStrideB_t<layout_b>>;
     using atom_load_B = Copy_Atom<traits_load_B, TB>;
-    TiledCopy copy_b = make_xe_2d_copy(
+    auto copy_b = make_xe_2d_copy(
         atom_load_B{}.with(B, n, k), Layout<Shape<_1, Int<SUBGROUP_SIZE>>>{},
         make_layout(make_shape(get<0>(typename traits_load_B::Shape_MN{}),
                                get<1>(typename traits_load_B::Shape_MN{}) /
                                    Int<SUBGROUP_SIZE>{})));
+
     using traits_store_C = Copy_Traits<traits_c>;
     using atom_store_C = Copy_Atom<traits_store_C, TC>;
-    TiledCopy copy_c = make_xe_2d_copy(
-        atom_store_C{}.with(C, m, n, n),
-        Layout<Shape<_1, Int<SUBGROUP_SIZE>>>{},
+    auto copy_c = make_xe_2d_copy(
+        atom_store_C{}.with(C, m, n), Layout<Shape<_1, Int<SUBGROUP_SIZE>>>{},
         make_layout(make_shape(get<0>(typename traits_store_C::Shape_MN{}),
                                get<1>(typename traits_store_C::Shape_MN{}) /
                                    Int<SUBGROUP_SIZE>{})));
+
+    auto thread_idx = ThreadIdxX();
+
     TiledMMA mma = make_xe_tiled_mma(
         MMA_Atom<traits_mma>{},
         Layout<Shape<Int<cute::ceil_div(wg_tile_m, sg_tile_m)>,
                      Int<cute::ceil_div(wg_tile_n, sg_tile_n)>>>{});
+    auto thrd_mma = mma.get_thread_slice(thread_idx);
 
-    auto thread_idx = get_sub_group_local_id();
-    const int m_coord = BlockIdxX() * wg_tile_m +
-                        (get_sub_group_id() / sg_per_wg_x) * sg_tile_m;
-    const int n_coord = BlockIdxY() * wg_tile_n +
-                        (get_sub_group_id() % sg_per_wg_x) * sg_tile_n;
-    const int l_coord = BlockIdxZ();
+    Tensor fragment_A = thrd_mma.partition_fragment_A(gA(_, _, 0));
+    Tensor fragment_B = thrd_mma.partition_fragment_B(gB(_, _, 0));
+    Tensor fragment_C = thrd_mma.partition_fragment_C(gC);
 
-    ThrCopy thr_copy_a = copy_a.get_slice(thread_idx);
-    Tensor tgA = thr_copy_a.partition_D(sgA);
-    Tensor fragment_A = make_fragment_like(tgA(_, _, _, 0));
+    auto thr_copy_a = copy_a.get_slice(thread_idx);
+    auto copy_view_A = thr_copy_a.retile_D(fragment_A);
 
-    ThrCopy thr_copy_b = copy_b.get_slice(thread_idx);
-    Tensor tgB = thr_copy_b.partition_D(sgB);
-    Tensor fragment_B = make_fragment_like(tgB(_, _, _, 0));
+    auto thr_copy_b = copy_b.get_slice(thread_idx);
+    auto copy_view_B = thr_copy_b.retile_D(fragment_B);
 
-    ThrCopy thr_copy_c = copy_c.get_slice(thread_idx);
-    Tensor tgC = thr_copy_c.partition_S(sgC);
-    Tensor fragment_C = make_fragment_like(tgC);
+    auto thr_copy_c = copy_c.get_slice(thread_idx);
+    auto copy_view_C = thr_copy_c.retile_D(fragment_C);
+
     clear(fragment_C);
 
 #if CUTLASS_ENABLE_DEBUG_PRINTS
@@ -138,11 +133,11 @@ struct gemm_device_partition_sd {
       print("  gA : ");
       print(gA);
       print("\n");
-      print("tgA : ");
-      print(tgA);
-      print("\n");
-      print("fragment_A : ");
+      print("  fragment_A : ");
       print(fragment_A);
+      print("\n");
+      print("  copy_view_A : ");
+      print(copy_view_A);
       print("\n");
 
       print("=====================  B :\n");
@@ -152,11 +147,11 @@ struct gemm_device_partition_sd {
       print("  gB : ");
       print(gB);
       print("\n");
-      print("tgB : ");
-      print(tgB);
-      print("\n");
-      print("fragment_B : ");
+      print("  fragment_B : ");
       print(fragment_B);
+      print("\n");
+      print("  copy_view_B : ");
+      print(copy_view_B);
       print("\n");
 
       print("=====================  C :\n");
@@ -166,22 +161,28 @@ struct gemm_device_partition_sd {
       print("  gC : ");
       print(gC);
       print("\n");
-      print("tgC : ");
-      print(tgC);
-      print("\n");
-      print("fragment_C : ");
+      print("  fragment_C : ");
       print(fragment_C);
+      print("\n");
+      print("  copy_view_C : ");
+      print(copy_view_C);
       print("\n");
     }
 #endif
 
-    auto k_tile_max = size<3>(tgA);
-    for (int k_tile = 0; k_tile < k_tile_max; ++k_tile) {
+    auto sg_per_wg_x = wg_tile_n / sg_tile_n;
+    const int m_coord = BlockIdxX() * wg_tile_m +
+                        (get_sub_group_id() / sg_per_wg_x) * sg_tile_m;
+    const int n_coord = BlockIdxY() * wg_tile_n +
+                        (get_sub_group_id() % sg_per_wg_x) * sg_tile_n;
+    const int l_coord = BlockIdxZ();
 
+    auto k_tile_max = size<2>(gA);
+    for (int k_tile = 0; k_tile < k_tile_max; ++k_tile) {
       Tensor blk_tgA = copy_a.get_pvc_tensor(m_coord, k_tile * sg_tile_k,
-                                             l_coord, fragment_A.shape());
+                                             l_coord, copy_view_A.shape());
       Tensor blk_tgB = copy_b.get_pvc_tensor(n_coord, k_tile * sg_tile_k,
-                                             l_coord, fragment_B.shape());
+                                             l_coord, copy_view_B.shape());
 
 #if CUTLASS_ENABLE_DEBUG_PRINTS
       if (thread(LOG_THREAD, LOG_GROUP) && k_tile == 1) {
@@ -195,13 +196,12 @@ struct gemm_device_partition_sd {
 #endif
 
       // Copy gmem to rmem for k_tile+1 with tA|tB thread-partitioned tensors
-      copy(copy_a, blk_tgA, fragment_A);
-      copy(copy_b, blk_tgB, fragment_B);
+      copy(copy_a, blk_tgA, copy_view_A);
+      copy(copy_b, blk_tgB, copy_view_B);
 
       // Compute gemm on mma-partitioned smem
-      for (int i = 0; i < sg_tile_k / SUBGROUP_SIZE; i++) {
-        cute::gemm(mma, fragment_A(_, _, i), fragment_B(_, _, i), fragment_C);
-      }
+      cute::gemm<atom_load_A, atom_load_B>(mma, fragment_C, fragment_A,
+                                           fragment_B, fragment_C);
     }
 
     Tensor blk_tgC =
@@ -210,68 +210,3 @@ struct gemm_device_partition_sd {
     copy(copy_c, fragment_C, blk_tgC);
   }
 };
-
-TEST(PVC_CuTe_Xe, gemm_partition_sd_bf16_bf16_float_32x128x64) {
-  run<gemm_device_partition_sd<32, 128, 32, 64, 32, bfloat16_t, bfloat16_t,
-                               float, XE_2D_U16x8x16_LD_N, XE_2D_U16x16x16_LD_V,
-                               XE_2D_U32x8x16_ST_N>>(32, 128, 64);
-}
-
-TEST(PVC_CuTe_Xe, gemm_partition_sd_bf16_bf16_float_16x256x64) {
-  run<gemm_device_partition_sd<16, 128, 16, 128, 32, bfloat16_t, bfloat16_t,
-                               float, XE_2D_U16x8x16_LD_N, XE_2D_U16x16x16_LD_V,
-                               XE_2D_U32x8x16_ST_N>>(16, 256, 64);
-}
-
-TEST(PVC_CuTe_Xe, gemm_partition_sd_bf16_bf16_float_64x1024x64) {
-  run<gemm_device_partition_sd<32, 128, 32, 64, 32, bfloat16_t, bfloat16_t,
-                               float, XE_2D_U16x8x16_LD_N, XE_2D_U16x16x16_LD_V,
-                               XE_2D_U32x8x16_ST_N>>(64, 1024, 64);
-}
-
-TEST(PVC_CuTe_Xe, gemm_partition_sd_bf16_bf16_float_128x128x64) {
-  run<gemm_device_partition_sd<128, 128, 32, 64, 32, bfloat16_t, bfloat16_t,
-                               float, XE_2D_U16x8x16_LD_N, XE_2D_U16x16x16_LD_V,
-                               XE_2D_U32x8x16_ST_N>>(128, 128, 64);
-}
-TEST(PVC_CuTe_Xe, gemm_partition_sd_bf16_bf16_float_32x1024x1024) {
-  run<gemm_device_partition_sd<32, 1024, 32, 64, 32, bfloat16_t, bfloat16_t,
-                               float, XE_2D_U16x8x16_LD_N, XE_2D_U16x16x16_LD_V,
-                               XE_2D_U32x8x16_ST_N>>(32, 1024, 1024);
-}
-
-TEST(PVC_CuTe_Xe, gemm_partition_sd_bf16_bf16_float_4096x4096x256) {
-  run<gemm_device_partition_sd<256, 128, 32, 64, 32, bfloat16_t, bfloat16_t,
-                               float, XE_2D_U16x8x16_LD_N, XE_2D_U16x16x16_LD_V,
-                               XE_2D_U32x8x16_ST_N>>(4096, 4096, 256);
-}
-
-TEST(PVC_CuTe_Xe, gemm_partition_sd_bf16_bf16_float_1024x2048x512) {
-  run<gemm_device_partition_sd<256, 128, 32, 64, 32, bfloat16_t, bfloat16_t,
-                               float, XE_2D_U16x8x16_LD_N, XE_2D_U16x16x16_LD_V,
-                               XE_2D_U32x8x16_ST_N>>(1024, 2048, 512);
-}
-
-TEST(PVC_CuTe_Xe, gemm_partition_sd_bf16_bf16_float_1026x2048x512) {
-  run<gemm_device_partition_sd<256, 128, 32, 64, 32, bfloat16_t, bfloat16_t,
-                               float, XE_2D_U16x8x16_LD_N, XE_2D_U16x16x16_LD_V,
-                               XE_2D_U32x8x16_ST_N>>(1026, 2048, 512);
-}
-
-TEST(PVC_CuTe_Xe, gemm_partition_sd_bf16_bf16_float_1024x2050x512) {
-  run<gemm_device_partition_sd<256, 128, 32, 64, 32, bfloat16_t, bfloat16_t,
-                               float, XE_2D_U16x8x16_LD_N, XE_2D_U16x16x16_LD_V,
-                               XE_2D_U32x8x16_ST_N>>(1024, 2050, 512);
-}
-
-TEST(PVC_CuTe_Xe, gemm_partition_sd_bf16_bf16_float_1026x2050x256) {
-  run<gemm_device_partition_sd<256, 128, 32, 64, 32, bfloat16_t, bfloat16_t,
-                               float, XE_2D_U16x8x16_LD_N, XE_2D_U16x16x16_LD_V,
-                               XE_2D_U32x8x16_ST_N>>(1026, 2050, 256);
-}
-
-TEST(PVC_CuTe_Xe, gemm_partition_sd_bf16_bf16_float_512x1024x512) {
-  run<gemm_device_partition_sd<256, 256, 32, 64, 32, bfloat16_t, bfloat16_t,
-                               float, XE_2D_U16x8x16_LD_N, XE_2D_U16x16x16_LD_V,
-                               XE_2D_U32x8x16_ST_N>>(512, 1024, 512);
-}

@@ -251,6 +251,8 @@ struct XE_2D_U8x2x32_LD_N {
 };
 
 struct XE_2D_U8x2x32_ST_N {
+  using Shape_MN = Shape<_2, _32>;
+
   template <class T>
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                     int height, int pitch, intel::coord_t coord,

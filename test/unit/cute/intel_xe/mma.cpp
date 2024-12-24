@@ -29,6 +29,8 @@
  *
  **************************************************************************************************/
 
+#include "cutlass/detail/layout.hpp"
+
 #include <cute/tensor.hpp>
 #include <sycl/sycl.hpp>
 #include <syclcompat.hpp>
@@ -56,8 +58,7 @@ void gemm_device(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
                           make_layout(make_shape(m, n), make_stride(n, 1)));
 
   // Get the appropriate blocks for this thread block
-  auto cta_coord = make_coord(BlockIdxX(),
-                              BlockIdxY(), _); // (m,n,k)
+  auto cta_coord = make_coord(BlockIdxX(), BlockIdxY(), _); // (m,n,k)
 
   auto cta_tiler =
       make_shape(Int<wg_tile_m>{}, Int<wg_tile_n>{}, Int<sg_tile_k>{});
@@ -65,7 +66,7 @@ void gemm_device(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
   Tensor gB = local_tile(mB, cta_tiler, cta_coord, Step<X, _1, _1>{});
   Tensor gC = local_tile(mC, cta_tiler, cta_coord, Step<_1, _1, X>{});
 
-  TiledMMA mma = make_tiled_mma(
+  TiledMMA mma = make_xe_tiled_mma(
       MMA_Atom<MMA>{},
       Layout< // Require: subgroup_layout
           Shape<Int<cute::ceil_div(wg_tile_m, sg_tile_m)>,
@@ -93,10 +94,18 @@ void gemm_device(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
   if (thread(LOG_THREAD)) {
     print("=====================  A :\n");
 
-    print("  mA : "); print(mA); print("\n");
-    print("  gA : "); print(gA); print("\n");
-    print("tgA : "); print(tgA); print("\n");
-    print("fragment_A : "); print(fragment_A); print("\n\n");
+    print("  mA : ");
+    print(mA);
+    print("\n");
+    print("  gA : ");
+    print(gA);
+    print("\n");
+    print("tgA : ");
+    print(tgA);
+    print("\n");
+    print("fragment_A : ");
+    print(fragment_A);
+    print("\n\n");
   }
 #endif
 
@@ -104,10 +113,18 @@ void gemm_device(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
   if (thread(LOG_THREAD)) {
     print("=====================  B :\n");
 
-    print("  mB : "); print(mB); print("\n");
-    print("  gB : "); print(gB); print("\n");
-    print("tgB : "); print(tgB); print("\n");
-    print("fragment_B : "); print(fragment_B); print("\n\n");
+    print("  mB : ");
+    print(mB);
+    print("\n");
+    print("  gB : ");
+    print(gB);
+    print("\n");
+    print("tgB : ");
+    print(tgB);
+    print("\n");
+    print("fragment_B : ");
+    print(fragment_B);
+    print("\n\n");
   }
 #endif
 
@@ -115,10 +132,18 @@ void gemm_device(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
   if (thread(LOG_THREAD)) {
     print("=====================  C :\n");
 
-    print("  mC : "); print(mC); print("\n");
-    print("  gC : "); print(gC); print("\n");
-    print("tgC : "); print(tgC); print("\n");
-    print("fragment_C : "); print(fragment_C); print("\n\n");
+    print("  mC : ");
+    print(mC);
+    print("\n");
+    print("  gC : ");
+    print(gC);
+    print("\n");
+    print("tgC : ");
+    print(tgC);
+    print("\n");
+    print("fragment_C : ");
+    print(fragment_C);
+    print("\n\n");
   }
 #endif
 
@@ -131,7 +156,7 @@ void gemm_device(TA const *A, TB const *B, TC *C, uint32_t m, uint32_t n,
     copy(kB, fragment_B);
 
     // Compute gemm on mma-partitioned smem
-    gemm(mma, fragment_A, fragment_B, fragment_C);
+    cute::gemm(mma, fragment_A, fragment_B, fragment_C);
   }
 
   copy(fragment_C, tgC);
@@ -207,8 +232,8 @@ void MMA_Test(int m, int n, int k) {
   syclcompat::memcpy<TB>(d_B, h_B.data(), k * n);
   syclcompat::memcpy<TC>(d_C, h_C.data(), m * n);
 
-  gemm<MMA, wg_tile_m, wg_tile_n, sg_tile_m, sg_tile_n, sg_tile_k>(m, n, k, d_A,
-                                                                   d_B, d_C);
+  ::gemm<MMA, wg_tile_m, wg_tile_n, sg_tile_m, sg_tile_n, sg_tile_k>(
+      m, n, k, d_A, d_B, d_C);
   syclcompat::wait();
 
   verify(m, n, k, h_A.data(), h_B.data(), h_C.data(), d_C);
