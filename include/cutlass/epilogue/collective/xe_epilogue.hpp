@@ -41,6 +41,7 @@
 #include "cutlass/epilogue/collective/detail.hpp"
 #include "cutlass/epilogue/fusion/callbacks.hpp"
 #include "cutlass/epilogue/fusion/sm90_visitor_tma_warpspecialized.hpp"
+#include "cutlass/epilogue/fusion/xe_vistor_softmax.hpp"
 #include "cutlass/detail/layout.hpp"
 
 #include "cute/tensor.hpp"
@@ -312,7 +313,7 @@ public:
     bool is_C_load_needed = is_source_supported && fusion_callbacks.is_C_load_needed();
 
     Tensor trC = make_tensor<typename TiledMma::ValTypeC>(Shape<Int<FragmentSize>>{});
-    Tensor trD = make_tensor<typename TiledMma::ValTypeD>(Shape<Int<FragmentSize>>{});
+    Tensor trD = make_tensor<typename TiledMma::ValTypeD>(Shape<Int<FragmentSize>, Int<FragsM>, Int<FragsN>>{});
     Tensor rw_coord = params.xe_store_d.get_pvc_tensor(
             make_coord(m_offset, n_offset, l_offset),
             make_shape(_, Int<FragsM>{}, Int<FragsN>{}));
@@ -360,7 +361,8 @@ public:
       FragsM * FragsN * FragmentSize * SubgroupSize * ATOM_M * ATOM_N * ATOM_K;
     constexpr int MN = get<0>(CtaTileMNK{}) * get<1>(CtaTileMNK{});
     static_assert(ValuesLoaded == MN, "the total elements loaded by all threads should be the same as MxN" );
-
+    
+    auto synchronize = [&] () {};
     CUTLASS_PRAGMA_UNROLL
     for (int epi_n = 0; epi_n < FragsN; epi_n++) {
       CUTLASS_PRAGMA_UNROLL
@@ -375,13 +377,20 @@ public:
         auto acc_frag_mn = acc_frag(_, epi_m, epi_n);
 
         CUTLASS_PRAGMA_UNROLL
-        for (int epi_v = 0; epi_v < size(trD_frag); ++epi_v) {
-          trD_frag(epi_v) = cst_callbacks.visit(acc_frag_mn(epi_v), epi_v, epi_m, epi_n);
+        for (int epi_v = 0; epi_v < size<0>(trD_frag); ++epi_v) {
+          trD_frag(epi_v, epi_m, epi_n) = cst_callbacks.visit(acc_frag_mn(epi_v), epi_v, epi_m, epi_n);
         }
-        copy(params.xe_store_d, trD, rw_coord(_, epi_m, epi_n));
+        cst_callbacks.reduce(nullptr, synchronize, epi_m, epi_n, (epi_m == FragsM - 1 && epi_n == FragsN - 1), trD(_, epi_m, epi_n));
       }
     }
 
+    CUTLASS_PRAGMA_UNROLL
+    for (int epi_n = 0; epi_n < FragsN; epi_n++) {
+      CUTLASS_PRAGMA_UNROLL
+      for (int epi_m = 0; epi_m < FragsM; epi_m++) {
+        copy(params.xe_store_d, trD(_, epi_m, epi_n), rw_coord(_, epi_m, epi_n));
+      }
+    }
     cst_callbacks.end();
   }
 

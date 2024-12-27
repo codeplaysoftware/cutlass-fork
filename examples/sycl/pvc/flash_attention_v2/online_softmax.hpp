@@ -37,24 +37,8 @@
 #include <sycl/sycl.hpp>
 #include "cutlass/cutlass.h"
 
-#ifdef __SYCL_DEVICE_ONLY__
-#define SYCL_DEVICE_OCL_FMA(x, y) SYCL_EXTERNAL x
-#else
-#define SYCL_DEVICE_OCL_FMA(x, y) \
-  inline x                        \
-  {                               \
-    assert(false);                \
-    return (y)0;                  \
-  }
-#endif
-
 #define EXP sycl::native::exp
 #define DIV sycl::native::divide
-// TODO:: Temporary using OpenCL function as sycl_reduce_over_group spills on sycl::maximum<>() operation
-SYCL_DEVICE_OCL_FMA(float sub_group_reduce_add(float i), float);
-SYCL_DEVICE_OCL_FMA(float sub_group_reduce_max(float i), float);
-
-#undef SYCL_DEVICE_OCL_FMA
 
 namespace flash
 {

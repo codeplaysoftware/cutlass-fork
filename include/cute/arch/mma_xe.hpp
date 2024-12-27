@@ -66,7 +66,8 @@ SYCL_DEVICE_OCL(cute::intel::float4 intel_sub_group_tf32_tf32_matrix_mad_k8(cute
 SYCL_DEVICE_OCL(cute::intel::float2 intel_sub_group_tf32_tf32_matrix_mad_k8(float a, cute::intel::float8 b, cute::intel::float2 acc));
 SYCL_DEVICE_OCL(float  intel_sub_group_tf32_tf32_matrix_mad_k8(float a, cute::intel::float8 b, float acc));
 
-
+SYCL_DEVICE_OCL(float sub_group_reduce_add(float i));
+SYCL_DEVICE_OCL(float sub_group_reduce_max(float i));
 #undef SYCL_DEVICE_OCL
 
 namespace cute {
