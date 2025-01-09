@@ -42,8 +42,11 @@
 #endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-
+#ifdef SYCL_INTEL_TARGET
+static const int NumThreadsPerWarp = 16;
+#else
 static const int NumThreadsPerWarp = 32;
+#endif
 static const int NumThreadsPerWarpGroup = 128;
 static const int NumWarpsPerWarpGroup = NumThreadsPerWarpGroup / NumThreadsPerWarp;
 static const int NumThreadsPerHalfWarp = NumThreadsPerWarp / 2;
