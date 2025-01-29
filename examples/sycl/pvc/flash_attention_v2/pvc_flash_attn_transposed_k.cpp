@@ -107,6 +107,12 @@ struct Options {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+  using LayoutQ = cutlass::layout::RowMajor;
+  using LayoutK = cutlass::layout::RowMajor;
+  using LayoutV = cutlass::layout::RowMajor;
+  using LayoutO = cutlass::layout::RowMajor;
+  using LayoutLSE = cutlass::layout::RowMajor;
+
 template <
   class GemmKernel
 >
@@ -116,12 +122,6 @@ struct ExampleRunner {
   using StrideK = typename GemmKernel::StrideK;
   using StrideV = typename GemmKernel::StrideV;
   using StrideO = typename GemmKernel::StrideO;
-
-  using LayoutQ = cutlass::layout::RowMajor;
-  using LayoutK = cutlass::layout::RowMajor;
-  using LayoutV = cutlass::layout::RowMajor;
-  using LayoutO = cutlass::layout::RowMajor;
-  using LayoutLSE = cutlass::layout::RowMajor;
 
   using ElementQ = typename GemmKernel::ElementQ;
   using ElementK = typename GemmKernel::ElementK;
@@ -439,12 +439,6 @@ int main(int argc, const char** argv)
   using ElementInputQ = bfloat16_t;                        // <- data type of elements in input matrix A
   using ElementInputKV = bfloat16_t;                        // <- data type of elements in input matrix B
   using ElementOutput = float;                        // <- data type of elements in output matrix D
-
-  using LayoutQ = cutlass::layout::RowMajor;
-  using LayoutK = cutlass::layout::RowMajor;
-  using LayoutV = cutlass::layout::RowMajor;
-  using LayoutO = cutlass::layout::RowMajor;
-  using LayoutLSE = cutlass::layout::RowMajor;
 
   // Workgroup-level tile
   using TileShape = Shape<_128, _64, _32>;
