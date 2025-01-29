@@ -35,8 +35,8 @@
 #include "cutlass/gemm/gemm.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
 
-#include "online_softmax.hpp"
-#include "pvc_flash_attn_mma.hpp"
+#include "../applications/pvc/flash_attention_v2/online_softmax.hpp"
+#include "../applications/pvc/flash_attention_v2/pvc_flash_attn_mma.hpp"
 
 #ifdef __SYCL_DEVICE_ONLY__
 #define SYCL_DEVICE_SPV_SPLIT_BARRIER(x) SYCL_EXTERNAL x
