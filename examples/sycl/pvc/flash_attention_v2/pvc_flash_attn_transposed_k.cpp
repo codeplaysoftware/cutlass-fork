@@ -389,8 +389,9 @@ struct ExampleRunner {
       double flops_pv = 2.0 * options.batch * options.num_heads * options.seq_len * options.head_size * options.seq_len;
       double tflops = ((flops_qk + flops_pv) * 1e-12)/cute_time;
       double gbps = options.batch * options.num_heads * (options.seq_len * options.head_size + options.seq_len * options.head_size) * 2 * 2 * (1e-9) / (cute_time);
-      std::cout << "Problem Size: " << options.batch << 'x' << options.num_heads << 'x' << options.seq_len << 'x' << options.head_size << std::endl;
-      printf("Cutlass Flash Attention Performance:   %4.3f  GB/s   ,    %4.3f  TFlop/s   ,   %6.4f  ms\n", gbps, tflops, cute_time * 1000);
+      std::cout << "Problem Size: " << options.batch << 'x' << options.num_heads << 'x' << options.seq_len << 'x' << options.head_size << 
+                (options.is_causal ? "xCausal" : "xNonCausal") << std::endl;
+      printf("Cutlass Flash Attention (T) Performance:   %4.3f  GB/s   ,    %4.3f  TFlop/s   ,   %6.4f  ms\n", gbps, tflops, cute_time * 1000);
     } 
 
     return;

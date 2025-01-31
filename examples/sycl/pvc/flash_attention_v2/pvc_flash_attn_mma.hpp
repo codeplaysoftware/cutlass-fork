@@ -50,7 +50,6 @@ CUTLASS_DEVICE auto convert_type(Tensor<Engine, Layout> const &tensor) {
     using From_type = typename Engine::value_type;
     constexpr int numel = decltype(size(tensor))::value;
     cutlass::NumericArrayConverter<To_type, From_type, numel> convert_op;
-    // HACK: this requires tensor to be "contiguous"
     auto frag = convert_op(*reinterpret_cast<const cutlass::Array<From_type, numel> *>(tensor.data()));
     return make_tensor(make_rmem_ptr<To_type>(&frag), tensor.layout());
 }

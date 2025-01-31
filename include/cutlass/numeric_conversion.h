@@ -1132,7 +1132,7 @@ struct NumericArrayConverter<float, cutlass::half_t, N, Round> {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800)
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 800) || defined (__SYCL_DEVICE_ONLY__)
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 /// Partial specialization for Array<cutlass::bfloat16_t, 2> <= Array<float, 2>, round to nearest
@@ -1148,7 +1148,17 @@ struct NumericArrayConverter<cutlass::bfloat16_t, float, 2, FloatRoundStyle::rou
 
     unsigned d;
 
+  #if defined __CUDA_ARCH__ && __CUDA_ARCH__ >= 800 || defined __SYCL_CUDA_ARCH__ && __SYCL_CUDA_ARCH__ >= 800
+
     asm("cvt.rn.bf16x2.f32 %0, %1, %2;\n" : "=r"(d) : "f"(source[1]), "f"(source[0]) );
+
+  #elif defined SYCL_INTEL_TARGET
+
+    auto out = __spirv_ConvertFToBF16INTEL(__ocl_vec_t<float, 2>{source[1], source[0]});
+    d = out.x;
+    d = (d << 16) | out.y;
+
+  #endif
 
     return reinterpret_cast<result_type const &>(d);
   }
