@@ -31,8 +31,8 @@
 #include "cutlass/epilogue/collective/default_epilogue.hpp"
 #include "cutlass/epilogue/fusion/xe_callbacks.hpp"
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
-#include "pvc_flash_attn_gemm_universal.hpp"
-#include "pvc_flash_attn_epilogue.hpp"
+#include "../applications/pvc/flash_attention_v2/pvc_flash_attn_gemm_universal.hpp"
+#include "../applications/pvc/flash_attention_v2/pvc_flash_attn_epilogue.hpp"
 #include "cutlass/util/GPU_Clock.hpp"
 #include "cutlass/util/sycl_event_manager.hpp"
 

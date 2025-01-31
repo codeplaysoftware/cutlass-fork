@@ -35,8 +35,8 @@
 #include "cutlass/gemm/gemm.h"
 #include "cutlass/gemm/dispatch_policy.hpp"
 
-#include "online_softmax.hpp"
-#include "pvc_flash_attn_mma.hpp"
+#include "../applications/pvc/flash_attention_v2/online_softmax.hpp"
+#include "../applications/pvc/flash_attention_v2/pvc_flash_attn_mma.hpp"
 
 #ifdef __SYCL_DEVICE_ONLY__
 #define SYCL_DEVICE_SPV_SPLIT_BARRIER(x) SYCL_EXTERNAL x
@@ -405,23 +405,10 @@ public:
       
       flash::Softmax<ElementAccumulator>::template run<CausalMask, Vec, FragsM, FragsN>(nblock == 0, tSr,
                                                                                         max_reg, sum_reg, out_reg, params.softmax);
-      // 7) Convert S to P (FP32 -> BF16)
-      Tensor tPr = make_tensor<typename TiledMma::ValTypeA>(shape(tSr));
-      CUTLASS_PRAGMA_UNROLL
-      for (int p_idx = 0; p_idx < size(tPr); p_idx++)
-      {
-        #ifdef __SYCL_DEVICE_ONLY__
-        // Temporary patch to avoid linking in the devicelib fallback unconditionally.
-        tPr(p_idx).storage = __spirv_ConvertFToBF16INTEL(tSr(p_idx));
-        #else
-        tPr(p_idx) = static_cast<typename TiledMma::ValTypeA>(tSr(p_idx));
-        #endif
-      }
-      // 8) Scale out_reg with l
-      // 10) Perform GEMM O = 
+
       auto gV = local_tile(mV_nk, blk_shape, make_coord(0, 0, _), Step< X, _1, _1>{});
       auto tile_coord_PV = make_coord(0, head_size_coord, _, blk_l_coord);
-      collective_mma.mmaPV(tile_coord_PV, out_reg, tPr, gV, out_reg, 1, nblock, params.mainloop);
+      collective_mma.mmaPV(tile_coord_PV, out_reg, tSr, gV, out_reg, 1, nblock, params.mainloop);
       if(nblock + Prefetch_per_workgroup < nblock_limit ) {
         CUTLASS_PRAGMA_UNROLL
         for (int j = 0; j < iter_over_head_count; j++) {
