@@ -42,6 +42,20 @@
 
 namespace cutlass::gemm::collective {
 using namespace cute;
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename To_type, typename Engine, typename Layout>
+CUTLASS_DEVICE auto convert_type(Tensor<Engine, Layout> const &tensor) {
+    using From_type = typename Engine::value_type;
+    constexpr int numel = decltype(size(tensor))::value;
+    cutlass::NumericArrayConverter<To_type, From_type, numel> convert_op;
+    auto frag = convert_op(*reinterpret_cast<const cutlass::Array<From_type, numel> *>(tensor.data()));
+    return make_tensor(make_rmem_ptr<To_type>(&frag), tensor.layout());
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 template <
@@ -293,7 +307,7 @@ struct CollectiveMmaAttention<
   template <
   class TileCoord,
   class FragAccum,
-  class FragP,
+  class FragS,
   class TensorV,
   class FragSrc
   >
@@ -301,7 +315,7 @@ struct CollectiveMmaAttention<
   mmaPV(
     TileCoord tile_coord,
     FragAccum& accum,
-    FragP const &tPr,
+    FragS const &tSr,
     TensorV gB,
     FragSrc const &frag_src,
     int const &k_tile_count,
@@ -336,6 +350,9 @@ struct CollectiveMmaAttention<
         print(" PrefetchVTileSize :    ");print(PrefetchVTileSize{});print("\n");
       }
   #endif
+
+    // 7) Convert S to P (FP32 -> BF16)
+    Tensor tPr = convert_type<typename TiledMma::ValTypeA>(tSr);
 
     //
     // Mainloop

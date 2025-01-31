@@ -107,6 +107,12 @@ struct Options {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+  using LayoutQ = cutlass::layout::RowMajor;
+  using LayoutK = cutlass::layout::RowMajor;
+  using LayoutV = cutlass::layout::RowMajor;
+  using LayoutO = cutlass::layout::RowMajor;
+  using LayoutLSE = cutlass::layout::RowMajor;
+
 template <
   class GemmKernel
 >
@@ -116,12 +122,6 @@ struct ExampleRunner {
   using StrideK = typename GemmKernel::StrideK;
   using StrideV = typename GemmKernel::StrideV;
   using StrideO = typename GemmKernel::StrideO;
-
-  using LayoutQ = cutlass::layout::RowMajor;
-  using LayoutK = cutlass::layout::RowMajor;
-  using LayoutV = cutlass::layout::RowMajor;
-  using LayoutO = cutlass::layout::RowMajor;
-  using LayoutLSE = cutlass::layout::RowMajor;
 
   using ElementQ = typename GemmKernel::ElementQ;
   using ElementK = typename GemmKernel::ElementK;
@@ -389,8 +389,9 @@ struct ExampleRunner {
       double flops_pv = 2.0 * options.batch * options.num_heads * options.seq_len * options.head_size * options.seq_len;
       double tflops = ((flops_qk + flops_pv) * 1e-12)/cute_time;
       double gbps = options.batch * options.num_heads * (options.seq_len * options.head_size + options.seq_len * options.head_size) * 2 * 2 * (1e-9) / (cute_time);
-      std::cout << "Problem Size: " << options.batch << 'x' << options.num_heads << 'x' << options.seq_len << 'x' << options.head_size << std::endl;
-      printf("Cutlass Flash Attention Performance:   %4.3f  GB/s   ,    %4.3f  TFlop/s   ,   %6.4f  ms\n", gbps, tflops, cute_time * 1000);
+      std::cout << "Problem Size: " << options.batch << 'x' << options.num_heads << 'x' << options.seq_len << 'x' << options.head_size << 
+                (options.is_causal ? "xCausal" : "xNonCausal") << std::endl;
+      printf("Cutlass Flash Attention (T) Performance:   %4.3f  GB/s   ,    %4.3f  TFlop/s   ,   %6.4f  ms\n", gbps, tflops, cute_time * 1000);
     } 
 
     return;
@@ -439,12 +440,6 @@ int main(int argc, const char** argv)
   using ElementInputQ = bfloat16_t;                        // <- data type of elements in input matrix A
   using ElementInputKV = bfloat16_t;                        // <- data type of elements in input matrix B
   using ElementOutput = float;                        // <- data type of elements in output matrix D
-
-  using LayoutQ = cutlass::layout::RowMajor;
-  using LayoutK = cutlass::layout::RowMajor;
-  using LayoutV = cutlass::layout::RowMajor;
-  using LayoutO = cutlass::layout::RowMajor;
-  using LayoutLSE = cutlass::layout::RowMajor;
 
   // Workgroup-level tile
   using TileShape = Shape<_128, _64, _32>;
