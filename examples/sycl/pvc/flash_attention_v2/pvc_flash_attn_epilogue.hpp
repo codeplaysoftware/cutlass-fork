@@ -42,6 +42,7 @@
 #include "cutlass/epilogue/fusion/callbacks.hpp"
 #include "cutlass/epilogue/fusion/sm90_visitor_tma_warpspecialized.hpp"
 #include "cutlass/detail/layout.hpp"
+#include "online_softmax.hpp"
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -190,12 +191,10 @@ public:
     TileCoord tile_coord,
     FragOut &out,
     FragMax const &max,
-    FragSum const &sum,
+    FragSum &sum,
     TiledMma tiled_mma,
     ElementLSE const& softmax_scale
   ) {
-
-    Tensor tLSEr = make_fragment_like(sum);
 
     using namespace cute;
 
@@ -216,26 +215,33 @@ public:
     static constexpr int FragsM = get<0>(SubgroupTileShape{}) / get<0>(MmaAtomShape()); // A frags per sub_group
     static constexpr int FragsN = get<1>(SubgroupTileShape{}) / get<1>(MmaAtomShape()); // B frags per sub_group
 
-    static constexpr int FragmentSize = (get<0>(MmaAtomShape()) * get<1>(MmaAtomShape())) / SubgroupSize;
+    static constexpr int Vec = (get<0>(MmaAtomShape()) * get<1>(MmaAtomShape())) / SubgroupSize;
 
     // Indexing variables
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord;
     auto m_offset = m_coord * BLK_M + (get_sub_group_id() / ATOM_N) * SG_M;
     auto n_offset = n_coord * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N;
     auto l_offset = l_coord;
-
+    auto g = syclcompat::get_nd_item<1>().get_sub_group();
+    
     CUTLASS_PRAGMA_UNROLL
-    for (int x = 0; x < FragmentSize; x++) {
+    for (int y = 0; y < FragsM; y++) {
       CUTLASS_PRAGMA_UNROLL
-      for (int y = 0; y < FragsM; y++) {
-        
-        ElementLSE curr_sum = sum(x, y);
-        ElementO scale = (curr_sum == 0.f || curr_sum != curr_sum) ? 1.f : sycl::native::recip(curr_sum);
-        tLSEr(x, y) = curr_sum == 0.f ? -INFINITY : max(x, y) * softmax_scale + sycl::native::log(curr_sum);
-        
+      for (int x = 0; x < Vec; x += 2) {
+        int indx = y * Vec + x;
+        sycl::vec<ElementLSE, 2> cur_sum {sub_group_reduce_add(sum(indx)), 
+                                              sub_group_reduce_add(sum(indx +1)) }; 
+        sycl::vec<ElementO, 2> cur_scale {(cur_sum[0] == 0.f || cur_sum[0] != cur_sum[0]) ? 1.f : sycl::native::recip(cur_sum[0]),
+                                      (cur_sum[1] == 0.f || cur_sum[1] != cur_sum[1]) ? 1.f : sycl::native::recip(cur_sum[1])};
+        sycl::vec<ElementLSE,2> curr_scale_bcast = group_broadcast(g, max, (indx/2) % 16);
+        // Tensor tLSEr = from now on sum can be reused for;
+        sum(indx) = cur_sum[0] == 0.f ? -INFINITY : curr_scale_bcast[0] * softmax_scale + sycl::native::log(cur_sum[0]);
+        sum(indx + 1) = cur_sum[1] == 0.f ? -INFINITY : curr_scale_bcast[1] * softmax_scale + sycl::native::log(cur_sum[1]);
+
         CUTLASS_PRAGMA_UNROLL
         for (int z = 0; z < FragsN; z++) {
-          out(x, y, z) *= scale;
+          out(x, y, z) *= cur_scale[0];
+          out(x + 1, y, z) *= cur_scale[1];
         }
       }
     }
@@ -260,8 +266,9 @@ public:
     // work items within subgroup have the same sum() data stored
     // in registers
     CUTLASS_PRAGMA_UNROLL
-    for (int i = 0; i < cute::size(tLSEr); i += SubgroupSize) {
-      *(lse_ptr + i + lane_id) = tLSEr(i);
+    for (int i = 0; i < cute::size(sum); i += SubgroupSize) {
+      // Tensor tLSEr replacement by sum ;
+      *(lse_ptr + i + lane_id) = sum(i);
     }
   }
 

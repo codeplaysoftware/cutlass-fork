@@ -373,7 +373,7 @@ struct ExampleRunner {
     syclcompat::wait();
 
     // Verify that the result is correct
-    bool passed =  verify(problem_size, options.is_causal);
+    bool passed = verify(problem_size, options.is_causal);
     std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
 
      if (passed && options.iterations > 0) 

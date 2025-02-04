@@ -143,7 +143,6 @@ public:
   static constexpr int Vec = (get<0>(MmaAtomShape()) * get<1>(MmaAtomShape())) / SubgroupSize; //8
   static constexpr int FragsM = get<0>(SubgroupTileShape{}) / get<0>(MmaAtomShape());  // 4
   static constexpr int FragsN = get<1>(SubgroupTileShape{}) / get<1>(MmaAtomShape());  // 2
-  static_assert(FragsM % 4 == 0, "For better Softmax EXP scheduling operation SubgroupTileShape for M / MmaAtomShape for M must be multipe of 4." );
 
   // Kernel level shared memory storage
   struct SharedStorage {
@@ -353,11 +352,11 @@ public:
     // Allocate the tiled_mma and the accumulators for the (M,N) subgroup_shape
     TiledMma tiled_mma;
     Tensor out_reg = partition_fragment_C(tiled_mma, take<0, 2>(blk_shape));
-    // the max reg and sum reg each contains a 2d tesnor for 8 x 4 This is number of sequence lenght process per subgroup
-    Tensor max_reg = make_tensor<ElementAccumulator>(Shape<Int<Vec>, Int<FragsM>>{});
+    // There are 16 workitem and 32 max per subgroup, each worktime containt 2 max and cumulatively, they calculate the max per subgroup  
+    sycl::vec<ElementAccumulator, 2> max_reg{-INFINITY, -INFINITY};
+    //The sum reg each contains a 2d tesnor for 8 x 4 This is number of sequence lenght process per subgroup
     Tensor sum_reg = make_tensor<ElementAccumulator>(Shape<Int<Vec>, Int<FragsM>>{});
 
-    fill(max_reg, -INFINITY);
     clear(sum_reg);
     clear(out_reg);
     // Perform the collective scoped MMA
@@ -382,7 +381,7 @@ public:
       collective_mma.mmaQK(tile_coord_QK, tSr, gQ, gK, tSr, head_size / get<1>(subgroup_shape), params.mainloop);
 
       // Apply causal mask
-      if constexpr (CausalMask)
+      if  (CausalMask && nblock == nblock_limit-1)
       {
         // mask the elements of each tile where j > i
         int col_idx = item_id + load_idx;
@@ -431,9 +430,6 @@ public:
       }
       barrier_wait(barrier_scope);
     }
-
-    // Reduce the sum of exponents across the subgroup before scaling/normalizing output
-    flash::Softmax<ElementAccumulator>::template subgroup_allreduce<Vec, FragsM, FragsN>(sum_reg, sycl::plus<>());
 
     CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
 
