@@ -160,7 +160,7 @@ public:
     typename FusionCallbacks::Arguments thread{};
     ElementC const* ptr_C;
     StrideC dC;
-    ElementD const* ptr_D;
+    ElementD* ptr_D;
     StrideD dD;
   };
 
@@ -169,6 +169,10 @@ public:
     typename FusionCallbacks::Params thread{};
     XE_Copy_C xe_load_c;
     XE_Copy_D xe_store_d;
+    ElementC const* ptr_C = nullptr;
+    StrideC dC{};
+    ElementD* ptr_D = nullptr;
+    StrideD dD{};
   };
 
   //
@@ -206,7 +210,11 @@ public:
     return {
       FusionCallbacks::to_underlying_arguments(problem_shape, args.thread, workspace),
       xe_load_c,
-      xe_store_d
+      xe_store_d,
+      args.ptr_C,
+      args.dC,
+      args.ptr_D,
+      args.dD
     };
   }
 
@@ -296,9 +304,8 @@ public:
     // Indexing variables
     auto [M, N, K, L] = problem_shape_mnkl;
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
-    auto m_offset = m_coord * BLK_M + (get_sub_group_id() / ATOM_N) * SG_M;
-    auto n_offset = n_coord * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N;
-    auto l_offset = l_coord;
+    auto m_sg = get_sub_group_id() / ATOM_N;
+    auto n_sg = get_sub_group_id() % ATOM_N;
 
     using EpilogueTile = decltype(get<0>(params.xe_store_d.get_layoutS_MN()).shape());
 
@@ -310,12 +317,27 @@ public:
     auto sg_coord = make_coord(sg_m_coord, sg_n_coord, k_coord, l_coord);
 
     bool is_C_load_needed = is_source_supported && fusion_callbacks.is_C_load_needed();
+    
+    // Represent the full output tensor
+    Tensor mD_mnl = params.xe_store_d.get_pvc_tensor(make_shape(M,N,L));
+
+    // Tile the output tensor per CTA
+    Tensor g_cta_D_mnl = local_tile(mD_mnl, CtaTileMNK{}, make_coord(_,_,_), Step<_1,_1, X>{});             // (BLK_M,BLK_N,m,n,l)
+    
+    // Slice to get the tile this CTA is responsible for                                                 // (BLK_M,BLK_N)
+    Tensor g_cta_D = g_cta_D_mnl(_,_,m_coord,n_coord,l_coord);                                                   // (BLK_M,BLK_N)
+    
+    // Tile the output tensor per warp
+    Tensor gD_mnl = local_tile(g_cta_D, SubgroupTileShape{}, make_coord(_,_,_), Step<_1,_1, X>{});             // (BLK_M,BLK_N,m,n,l)
+
+    // Slice to get the tile this warp is responsible for
+    Tensor gD = gD_mnl(_,_,m_sg,n_sg);                                                   // (BLK_M,BLK_N)
+
+    auto thread_xe_store_d = params.xe_store_d.get_thread_slice(thread_idx);
+    Tensor tCgD = thread_xe_store_d.partition_D(gD);
 
     Tensor trC = make_tensor<typename TiledMma::ValTypeC>(Shape<Int<FragmentSize>>{});
     Tensor trD = make_tensor<typename TiledMma::ValTypeD>(Shape<Int<FragmentSize>>{});
-    Tensor rw_coord = params.xe_store_d.get_pvc_tensor(
-            make_coord(m_offset, n_offset, l_offset),
-            make_shape(_, Int<FragsM>{}, Int<FragsN>{}));
 
     // Because Sm90 uses shared memory, they are not tied to using the same accumulator values
     // for MMA and Epilogue. But because we are operating directly in the accumulators, we need to be
@@ -334,7 +356,7 @@ public:
     // Get the fusion callbacks
     // Arguments passed here relate to sub-group tiles, rather than CTA (work-group) tiles
     constexpr bool RefSrc = true;
-    auto residue_mn = make_coord(M, N);
+    auto residue_mn = make_coord(M, N); //TODO(Codeplay): this is not correct
     auto cst_args = cutlass::epilogue::fusion::detail::ConsumerStoreArgs{
                       problem_shape_mnkl,
                       SubgroupTileShape{},
@@ -367,7 +389,8 @@ public:
       for (int epi_m = 0; epi_m < FragsM; epi_m++) {
 
         if (is_C_load_needed) {
-          copy(params.xe_load_c, rw_coord(_, epi_m, epi_n), trC);
+          //cordinates for C and D are the same
+          copy(params.xe_load_c, tCgD(_, epi_m, epi_n), trC);
         }
 
         cst_callbacks.previsit(epi_m, epi_n, 0, is_C_load_needed);
@@ -378,7 +401,7 @@ public:
         for (int epi_v = 0; epi_v < size(trD_frag); ++epi_v) {
           trD_frag(epi_v) = cst_callbacks.visit(acc_frag_mn(epi_v), epi_v, epi_m, epi_n);
         }
-        copy(params.xe_store_d, trD, rw_coord(_, epi_m, epi_n));
+        copy(params.xe_store_d, trD, tCgD(_, epi_m, epi_n));
       }
     }
 

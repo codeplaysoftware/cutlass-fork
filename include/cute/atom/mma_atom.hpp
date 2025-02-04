@@ -537,6 +537,13 @@ struct ThrMMA : TiledMMA
     auto thr_tensor = make_tensor(static_cast<BTensor&&>(btensor).data(), this->thrfrg_B(btensor.layout()));
 
     auto thr_vnk = make_coord(get<0>(thr_vmnk_), make_coord(get<2>(thr_vmnk_), get<3>(thr_vmnk_)));
+    if(cute::thread(127,33)){
+      print("partition_B\n");
+      print("thrfrg_B "); print(this->thrfrg_B(btensor.layout())); print("\n");
+      print("thr_tensor "); print(thr_tensor); print("\n");
+      print("thr_vnk "); print(thr_vnk); print("\n");
+      print("res "); print(thr_tensor(thr_vnk, make_coord(_, repeat<rank<1,1>(thr_tensor)>(_)))); print("\n");
+    }
     return thr_tensor(thr_vnk, make_coord(_, repeat<rank<1,1>(thr_tensor)>(_)));
   }
 

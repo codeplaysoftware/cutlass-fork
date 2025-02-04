@@ -248,21 +248,24 @@ public:
     auto blk_l_coord = BlockIdxZ();
     auto blk_coord_mnkl = make_coord(blk_m_coord, blk_n_coord, _, blk_l_coord);
 
-    Tensor mQ_mkl = make_tensor(make_gmem_ptr(static_cast<ElementQ const*>(nullptr)),
+    /*Tensor mQ_mkl = make_tensor(make_gmem_ptr(static_cast<ElementQ const*>(nullptr)),
                                 make_shape(seq_len, head_size, batch * num_heads), StrideQ{});   //(m,k,l)
     Tensor mK_nkl = make_tensor(make_gmem_ptr(static_cast<ElementK const*>(nullptr)),
                                 make_shape(seq_len, head_size, batch * num_heads), StrideK{});   //(n,k,l)
     Tensor mV_nkl = make_tensor(make_gmem_ptr(static_cast<ElementV const*>(nullptr)),
-                                make_shape(head_size, seq_len, batch * num_heads), StrideV{});   //(n,k,l)
+                                make_shape(head_size, seq_len, batch * num_heads), StrideV{});   //(n,k,l)*/
+    Tensor mQ_mkl = params.mainloop.gmem_tiled_copy_q.get_pvc_tensor(make_shape(seq_len, head_size, batch * num_heads));   //(m,k,l)
+    Tensor mK_nkl = params.mainloop.gmem_tiled_copy_k.get_pvc_tensor(make_shape(seq_len, head_size, batch * num_heads));   //(m,k,l)
+    Tensor mV_nkl = params.mainloop.gmem_tiled_copy_v.get_pvc_tensor(make_shape(head_size, seq_len, batch * num_heads));   //(n,k,l)
     Tensor mQ_mk = mQ_mkl(_,_,blk_l_coord);                                                      // (m,k)
     Tensor mK_nk = mK_nkl(_,_,blk_l_coord);                                                      // (n,k)
     Tensor mV_nk = mV_nkl(_,_,blk_l_coord);                                                      // (n,k)
 
-    auto gQ = local_tile(mQ_mk, blk_shape, make_coord(blk_m_coord, 0, _), Step<_1,  X, _1>{});
+    auto gQ = local_tile(mQ_mk, blk_shape, make_coord(blk_m_coord, _, _), Step<_1,  X, _1>{});
 
-    const int seq_coord = BlockIdxY() * BLK_M + (sub_group_id / ATOM_N) * SG_M;
-    const int head_size_coord = BlockIdxX() * BLK_N + (sub_group_id % ATOM_N) * SG_N;
-    const int l_coord = BlockIdxZ();
+    const int seq_coord = blk_m_coord * BLK_M + (sub_group_id / ATOM_N) * SG_M;
+    const int head_size_coord = blk_n_coord * BLK_N + (sub_group_id % ATOM_N) * SG_N;
+    const int l_coord = blk_l_coord;
 
     // Compute tile residues for predication
     auto m_max_coord = seq_len - get<0>(subgroup_shape) * seq_coord;                                // M - SUB_M * m_coord
@@ -373,12 +376,27 @@ public:
       barrier_arrive(barrier_scope);
       // 1) Load K (performed inside mmaQK)
       // 2) Create Tensor S
-      auto gK = local_tile(mK_nk, blk_shape, make_coord(0, 0, _), Step<X, _1, _1>{});
+      auto gK = local_tile(mK_nk, subgroup_shape, make_coord(_, nblock - blk_n_coord, _), Step<X, _1, _1>{});
       Tensor tSr = make_tensor<ElementAccumulator>(Shape<Int<Vec>, Int<FragsM>, Int<FragsN>>{});
       clear(tSr);
 
       // 3) Perform GEMM S = Q*K
       auto tile_coord_QK = make_coord(seq_coord, load_idx, _, blk_l_coord);
+
+      /*if(cute::thread(127,33)){
+        print("tile_coord_QK "); print(tile_coord_QK); print("\n");
+        print("mK_nk "); print(mK_nk); print("\n");
+        print("gK_nk "); print(local_tile(mK_nk, blk_shape, make_coord(_, _, _), Step<X, _1, _1>{})); print("\n");
+        print("gK "); print(gK); print("\n");
+        print("blk_m_coord "); print(blk_m_coord); print("\n");
+        print("blk_n_coord "); print(blk_n_coord); print("\n");
+        print("blk_l_coord "); print(blk_l_coord); print("\n");
+        print("nblock "); print(nblock); print("\n");
+        print("load_idx "); print(load_idx); print("\n");
+        print("WorkgroupTileShape "); print(WorkgroupTileShape{}); print("\n");
+        print("SubgroupTileShape "); print(SubgroupTileShape{}); print("\n");
+      }*/
+
       collective_mma.mmaQK(tile_coord_QK, tSr, gQ, gK, tSr, head_size / get<1>(subgroup_shape), params.mainloop);
 
       // Apply causal mask
@@ -419,8 +437,9 @@ public:
       }
       // 8) Scale out_reg with l
       // 10) Perform GEMM O = 
-      auto gV = local_tile(mV_nk, blk_shape, make_coord(0, 0, _), Step< X, _1, _1>{});
+      auto gV = local_tile(mV_nk, blk_shape, make_coord(_, blk_n_coord, _), Step< X, _1, _1>{});
       auto tile_coord_PV = make_coord(0, head_size_coord, _, blk_l_coord);
+      
       collective_mma.mmaPV(tile_coord_PV, out_reg, tPr, gV, out_reg, 1, nblock, params.mainloop);
       if(nblock + Prefetch_per_workgroup < nblock_limit ) {
         CUTLASS_PRAGMA_UNROLL
