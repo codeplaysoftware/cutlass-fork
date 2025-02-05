@@ -378,7 +378,9 @@ public:
         for (int epi_v = 0; epi_v < size(trD_frag); ++epi_v) {
           trD_frag(epi_v) = cst_callbacks.visit(acc_frag_mn(epi_v), epi_v, epi_m, epi_n);
         }
-        copy(params.xe_store_d, trD, rw_coord(_, epi_m, epi_n));
+        if constexpr (is_destination_supported) {
+          copy(params.xe_store_d, trD, rw_coord(_, epi_m, epi_n));
+        }
       }
     }
 
