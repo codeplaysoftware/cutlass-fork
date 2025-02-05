@@ -176,12 +176,13 @@ template<
   class EpilogueTile,
   class ElementOutput,
   class ElementCompute,
+  class CopyOpR2G,
   class ElementSource = ElementOutput,
   class ElementScalar = ElementCompute,
   FloatRoundStyle RoundStyle = FloatRoundStyle::round_to_nearest
 >
 using XeLinCombSoftmaxRow =
-  Sm90EVT<XeSoftmaxRowReduction<CtaTileShapeMNK, EpilogueTile, ElementOutput, ElementCompute, RoundStyle>, // softmax(beta * C + (alpha * acc))
+  Sm90EVT<XeSoftmaxRowReduction<CtaTileShapeMNK, EpilogueTile, ElementOutput, ElementCompute, CopyOpR2G, RoundStyle>, // softmax(beta * C + (alpha * acc))
     Sm90LinearCombination<ElementCompute, ElementCompute, ElementSource, ElementScalar, RoundStyle> // beta * C + (alpha * acc)
   >;
 
@@ -191,29 +192,31 @@ template <
   class ElementCompute_,
   class ElementSource_,
   class ElementScalar_,
+  class CopyOpR2G_,
   FloatRoundStyle RoundStyle,
   class CtaTileShapeMNK,
   class EpilogueTile
 >
 struct FusionCallbacks<
     epilogue::IntelPVCEpilogue,
-    fusion::LinCombSoftmaxRow<ElementOutput_, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle>,
+    fusion::LinCombSoftmaxRow<ElementOutput_, ElementCompute_, CopyOpR2G_, ElementSource_, ElementScalar_, RoundStyle>,
     CtaTileShapeMNK,
     EpilogueTile
-> : XeLinCombSoftmaxRow<CtaTileShapeMNK, EpilogueTile, ElementOutput_, ElementCompute_, ElementSource_, ElementScalar_, RoundStyle> {
+> : XeLinCombSoftmaxRow<CtaTileShapeMNK, EpilogueTile, ElementOutput_, ElementCompute_, CopyOpR2G_, ElementSource_, ElementScalar_, RoundStyle> {
 
   using ElementOutput = ElementOutput_;
   using ElementCompute = ElementCompute_;
   using ElementSource = ElementSource_;
   using ElementScalar = ElementScalar_;
-  using Impl = XeLinCombSoftmaxRow<CtaTileShapeMNK, EpilogueTile, typename cutlass::detail::get_unpacked_element_type<ElementOutput>::type, ElementCompute, ElementSource, ElementScalar, RoundStyle>;
-  using Operation = fusion::LinCombSoftmaxRow<ElementOutput_, ElementCompute, ElementSource, ElementScalar, RoundStyle>;
+  using Impl = XeLinCombSoftmaxRow<CtaTileShapeMNK, EpilogueTile, typename cutlass::detail::get_unpacked_element_type<ElementOutput>::type, ElementCompute, CopyOpR2G_, ElementSource, ElementScalar, RoundStyle>;
+  using Operation = fusion::LinCombSoftmaxRow<ElementOutput_, ElementCompute, CopyOpR2G_, ElementSource, ElementScalar, RoundStyle>;
 
   struct Arguments {
     ElementScalar alpha = ElementScalar(1);
     ElementScalar beta = ElementScalar(0);
     ElementScalar const* alpha_ptr = nullptr;
     ElementScalar const* beta_ptr = nullptr;
+    ElementOutput* output_ptr = nullptr;
 
     operator typename Impl::Arguments() const {
       return
@@ -228,7 +231,7 @@ struct FusionCallbacks<
             },                    // end binary op
             {} // ternary args : multiply_add
           },   // end ternary op
-          {} // unary args: activation
+          {output_ptr} // unary args: activation
         };   // end unary op
     }
   };

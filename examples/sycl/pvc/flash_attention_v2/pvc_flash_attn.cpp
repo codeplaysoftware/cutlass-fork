@@ -124,12 +124,6 @@ struct ExampleRunner {
   using StrideV = typename GemmKernel::StrideV;
   using StrideO = typename GemmKernel::StrideO;
 
-  using LayoutQ = cutlass::layout::RowMajor;
-  using LayoutK = cutlass::layout::RowMajor;
-  using LayoutV = cutlass::layout::RowMajor;
-  using LayoutO = cutlass::layout::RowMajor;
-  using LayoutLSE = cutlass::layout::RowMajor;
-
   using ElementQ = typename GemmKernel::ElementQ;
   using ElementK = typename GemmKernel::ElementK;
   using ElementV = typename GemmKernel::ElementV;
@@ -470,7 +464,7 @@ int main(int argc, const char** argv)
 
   if(options.is_causal) {
     using GmemTiledCopyQ = XE_2D_U16x32x32_LD_N;
-    using GmemTiledCopyK = XE_2D_U16x16x32_LD_V;
+    using GmemTiledCopyK = XE_2D_U16x16x16_LD_T;
     using GmemTiledCopyV = XE_2D_U16x16x32_LD_V;
     // Mainloop
     using CollectiveMainloop = cutlass::gemm::collective::CollectiveMmaAttention<

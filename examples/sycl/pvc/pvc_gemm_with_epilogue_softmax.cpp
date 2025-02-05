@@ -286,11 +286,16 @@ struct ExampleRunner {
     ProblemShapeType problem_size = ProblemShapeType{options.m, options.n, options.k, options.l};
 
     initialize(problem_size);
+    using EpilogueArguments = typename Gemm::GemmKernel::EpilogueArguments;
+    EpilogueArguments epilogue_arguments{
+      {options.alpha, options.beta}, block_C.get(), stride_C, block_D.get(), stride_D};
+    epilogue_arguments.thread.output_ptr = block_D.get();
+    
     typename Gemm::GemmKernel::Arguments arguments{
       cutlass::gemm::GemmUniversalMode::kGemm,
       problem_size,
       {block_A.get(), stride_A, block_B.get(), stride_B},
-      {{options.alpha, options.beta}, block_C.get(), stride_C, block_D.get(), stride_D},
+      epilogue_arguments,
       hw_info
     };
 
@@ -398,7 +403,7 @@ int main(int argc, const char** argv)
   using EpilogueDispatchPolicy = cutlass::epilogue::IntelPVCEpilogue;
 
   using EpilogueOp = cutlass::epilogue::fusion::LinCombSoftmaxRow<ElementOutput,
-          ElementComputeEpilogue, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
+          ElementComputeEpilogue, XE_2D_U32x8x16_ST_N, ElementAccumulator, ElementAccumulator, cutlass::FloatRoundStyle::round_to_nearest>;
 
   using FusionCallBacks = cutlass::epilogue::fusion::FusionCallbacks<EpilogueDispatchPolicy, EpilogueOp, TileShape,
           EpilogueTile>;
@@ -412,7 +417,7 @@ int main(int argc, const char** argv)
           FusionCallBacks,
           XE_2D_U32x8x16_LD_N,
           void, void,
-          XE_2D_U32x8x16_ST_N,
+          void,
           void, void>;
 
 // Mainloop

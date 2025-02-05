@@ -141,6 +141,7 @@ struct LinCombTopKSoftmaxCol
 template<
   class ElementOutput_,
   class ElementCompute_,
+  class CopyOpR2G_,
   class ElementSource_ = ElementOutput_,
   class ElementScalar_ = ElementCompute_,
   FloatRoundStyle RoundStyle_ = FloatRoundStyle::round_to_nearest
