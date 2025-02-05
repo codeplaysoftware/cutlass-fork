@@ -38,8 +38,10 @@
 
 #if defined(CUTLASS_ENABLE_SYCL)
 #include <sycl/sycl.hpp>
+#if !defined(__CUDA__)
 #include <syclcompat.hpp>
-#endif
+#endif // !defined(__CUDA__)
+#endif // defined(CUTLASS_ENABLE_SYCL)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -325,7 +327,7 @@ T shfl_xor_sync(
  * with CUDA definitions. When using CUDA, only the global definitions are available. This way we don't have to modify
  * the codebase, and we can rely on the compiler to select the right definition in both cases.
  */
-#if defined(CUTLASS_ENABLE_SYCL)
+#if !defined(__CUDA__) && defined(CUTLASS_ENABLE_SYCL)
 
 namespace cutlass {
 
@@ -445,6 +447,6 @@ cudaError_t cudaOccupancyMaxActiveBlocksPerMultiprocessorWithFlags(
 namespace cute {
   using dim3 = syclcompat::dim3;
 }
-#endif
+#endif // defined(CUTLASS_ENABLE_SYCL)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

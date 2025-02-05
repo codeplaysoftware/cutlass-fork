@@ -37,7 +37,7 @@
 #pragma once
 
 // FP8 types are available starting CUDA 11.8+
-#if (__CUDACC_VER_MAJOR__ >= 12) || ((__CUDACC_VER_MAJOR__ == 11) && (__CUDACC_VER_MINOR__ >= 8))
+#if (defined(CUTLASS_ENABLE_SYCL) && defined(__CUDA__)) || (__CUDACC_VER_MAJOR__ >= 12) || ((__CUDACC_VER_MAJOR__ == 11) && (__CUDACC_VER_MINOR__ >= 8))
 #define CUDA_FP8_ENABLED 1
 #endif
 
@@ -74,14 +74,15 @@
 #include <cstring>
 #endif
 
-#if !defined(CUTLASS_ENABLE_SYCL)
 #ifdef CUDA_FP8_ENABLED
 #include <cuda_fp8.h>
-#endif
+#endif // CUDA_FP8_ENABLED
+
+#if defined(__CUDA__)
 #include <cuda_fp16.h>
 #else
 #include <cutlass/sycl_fp16.h>
-#endif
+#endif // defined(__CUDA__)
 
 #include "cutlass/cutlass.h"
 ///////////////////////////////////////////////////////////////////////////////////////////////////

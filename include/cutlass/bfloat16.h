@@ -45,9 +45,9 @@
 #include <cstring>
 #endif
 
-#if !defined(CUTLASS_ENABLE_SYCL)
+#if defined(__CUDA__)
 #include <cuda_bf16.h>
-#endif
+#endif // defined(__CUDA__)
 
 #include "cutlass/cutlass.h"
 #include "cutlass/platform/platform.h"
@@ -103,7 +103,7 @@ public:
   /// Default constructor
   bfloat16_t() = default;
 
-#if !defined(CUTLASS_ENABLE_SYCL)
+#if defined(__CUDA__)
   /// Reinterpret cast from CUDA's __nv_bfloat16 type
   CUTLASS_HOST_DEVICE
   explicit bfloat16_t(__nv_bfloat16 const & x) {
@@ -114,7 +114,7 @@ public:
     std::memcpy(&storage, &raw.x, sizeof(storage));
     #endif
   }
-#endif
+#endif // defined(__CUDA__)
 
   /// Floating-point conversion - round toward nearest
   CUTLASS_HOST_DEVICE
@@ -199,13 +199,13 @@ public:
     return (float(*this) != 0.0f);
   }
 
-#if !defined(CUTLASS_ENABLE_SYCL)
+#if defined(__CUDA__)
   /// Bitcasts to CUDA's bf16 type
   CUTLASS_DEVICE
   __nv_bfloat16 to_nv_bfloat16() const {
     return reinterpret_cast<__nv_bfloat16 const &>(storage);
   }
-#endif
+#endif // defined(__CUDA__)
 
   /// Obtains raw bits
   CUTLASS_HOST_DEVICE
