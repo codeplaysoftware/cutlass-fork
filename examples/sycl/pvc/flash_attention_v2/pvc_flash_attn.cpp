@@ -495,7 +495,7 @@ int main(int argc, const char** argv)
   } else {
     using GmemTiledCopyQ = XE_2D_U16x32x32_LD_N;
     using GmemTiledCopyK = XE_2D_U16x16x16_LD_T;
-    using GmemTiledCopyV = XE_2D_U16x16x32_LD_V;
+    using GmemTiledCopyV = XE_2D_U16x32x32_LD_V;
     // Mainloop
     using CollectiveMainloop = cutlass::gemm::collective::CollectiveMmaAttention<
             GEMMDispatchPolicy,

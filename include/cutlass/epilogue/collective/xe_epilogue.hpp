@@ -118,18 +118,15 @@ public:
   static_assert(std::is_same_v<SmemLayoutAtomC, void>, "Copy operation to shared memory is not supported");
   static_assert(std::is_same_v<SmemLayoutAtomD, void>, "Copy operation to shared memory is not supported");
 
-  using Trait_C = Copy_Traits<GmemTiledCopyC>;
-  using XE_Copy_C = decltype(make_tiled_copy(Copy_Atom<Trait_C, ElementC>{}
-                                             .with(static_cast<ElementC const*>(nullptr), int32_t(0), int32_t(0)),
-                                             Layout<Shape<_1, Int<SubgroupSize>>>{},
-                                             make_layout(make_shape(get<0>(typename Trait_C::BlockShape{}),
-                                                                    get<1>(typename Trait_C::BlockShape{}) / Int<SubgroupSize>{}))));
-  using Trait_D = Copy_Traits<GmemTiledCopyD>;
-  using XE_Copy_D = decltype(make_tiled_copy(Copy_Atom<Trait_D, ElementD>{}
-                                             .with(static_cast<ElementD const*>(nullptr),int32_t(0), int32_t(0)),
-                                             Layout<Shape<_1, Int<SubgroupSize>>>{},
-                                             make_layout(make_shape(get<0>(typename Trait_D::BlockShape{}),
-                                                                    get<1>(typename Trait_D::BlockShape{}) / Int<SubgroupSize>{}))));
+  using CopyThreadShape = Shape<_1, Int<SubgroupSize>>;
+  using Trait_C = Copy_Traits<GmemTiledCopyC, StrideC>;
+  using XE_Copy_C = decltype(make_tiled_copy(Copy_Atom<Trait_C, ElementC>{},
+                                             Layout<CopyThreadShape>{},
+                                             make_layout(shape_div(typename Trait_C::BlockShape{}, CopyThreadShape{}))));
+  using Trait_D = Copy_Traits<GmemTiledCopyD, StrideD>;
+  using XE_Copy_D = decltype(make_tiled_copy(Copy_Atom<Trait_D, ElementD>{},
+                                             Layout<CopyThreadShape>{},
+                                             make_layout(shape_div(typename Trait_D::BlockShape{}, CopyThreadShape{}))));
 private:
   constexpr static bool is_source_supported = not cute::is_void_v<ElementC>;
   constexpr static bool is_destination_supported = not cute::is_void_v<ElementD>;
@@ -160,7 +157,7 @@ public:
     typename FusionCallbacks::Arguments thread{};
     ElementC const* ptr_C;
     StrideC dC;
-    ElementD const* ptr_D;
+    ElementD* ptr_D;
     StrideD dD;
   };
 
@@ -169,6 +166,10 @@ public:
     typename FusionCallbacks::Params thread{};
     XE_Copy_C xe_load_c;
     XE_Copy_D xe_store_d;
+    ElementC const* ptr_C = nullptr;
+    StrideC dC{};
+    ElementD* ptr_D = nullptr;
+    StrideD dD{};
   };
 
   //
@@ -187,26 +188,28 @@ public:
 
     XE_Copy_C xe_load_c = {};
     if constexpr (is_source_supported) {
-      xe_load_c = make_tiled_copy(Copy_Atom<Copy_Traits<CopyOpG2R>, ElementC>{}.with(
+      xe_load_c = make_tiled_copy(Copy_Atom<Trait_C, ElementC>{}.with(
                                   args.ptr_C, M, N),
-                                  Layout<Shape<_1, Int<SubgroupSize>>>{},
-                                  make_layout(make_shape(get<0>(typename Trait_C::BlockShape{}),
-                                                         get<1>(typename Trait_C::BlockShape{}) / Int<SubgroupSize>{})));
+                                  Layout<CopyThreadShape>{},
+                                  make_layout(shape_div(typename Trait_C::BlockShape{}, CopyThreadShape{})));
     }
 
     XE_Copy_D xe_store_d = {};
     if constexpr (is_destination_supported) {
-      xe_store_d = make_tiled_copy(Copy_Atom<Copy_Traits<CopyOpR2G>, ElementD>{}.with(
+      xe_store_d = make_tiled_copy(Copy_Atom<Trait_D, ElementD>{}.with(
                                    args.ptr_D, M, N),
-                                   Layout<Shape<_1, Int<SubgroupSize>>>{},
-                                   make_layout(make_shape(get<0>(typename Trait_D::BlockShape{}),
-                                                          get<1>(typename Trait_D::BlockShape{}) / Int<SubgroupSize>{})));
+                                   Layout<CopyThreadShape>{},
+                                   make_layout(shape_div(typename Trait_D::BlockShape{}, CopyThreadShape{})));
     }
 
     return {
       FusionCallbacks::to_underlying_arguments(problem_shape, args.thread, workspace),
       xe_load_c,
-      xe_store_d
+      xe_store_d,
+      args.ptr_C,
+      args.dC,
+      args.ptr_D,
+      args.dD
     };
   }
 
@@ -296,9 +299,8 @@ public:
     // Indexing variables
     auto [M, N, K, L] = problem_shape_mnkl;
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord_mnkl;
-    auto m_offset = m_coord * BLK_M + (get_sub_group_id() / ATOM_N) * SG_M;
-    auto n_offset = n_coord * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N;
-    auto l_offset = l_coord;
+    auto m_sg = get_sub_group_id() / ATOM_N;
+    auto n_sg = get_sub_group_id() % ATOM_N;
 
     using EpilogueTile = decltype(get<0>(params.xe_store_d.get_layoutS_MN()).shape());
 
@@ -310,12 +312,21 @@ public:
     auto sg_coord = make_coord(sg_m_coord, sg_n_coord, k_coord, l_coord);
 
     bool is_C_load_needed = is_source_supported && fusion_callbacks.is_C_load_needed();
+    
+    // Represent the full output tensor
+    Tensor mD_mnl = params.xe_store_d.get_pvc_tensor(make_shape(M,N,L));
+
+    // Tile the output tensor per WG and select the tile for current WG
+    Tensor g_wg_D = local_tile(mD_mnl, take<0,2>(CtaTileMNK{}), make_coord(m_coord,n_coord,l_coord));  // (BLK_M,BLK_N)
+    
+    // Tile the output tensor per SG and select tile for the current SG
+    Tensor gD = local_tile(g_wg_D, take<0,2>(SubgroupTileShape{}), make_coord(m_sg,n_sg));            // (SG_M,SG_N)
+
+    auto thread_xe_store_d = params.xe_store_d.get_thread_slice(thread_idx);
+    Tensor tCgD = thread_xe_store_d.partition_D(gD);
 
     Tensor trC = make_tensor<typename TiledMma::ValTypeC>(Shape<Int<FragmentSize>>{});
     Tensor trD = make_tensor<typename TiledMma::ValTypeD>(Shape<Int<FragmentSize>>{});
-    Tensor rw_coord = params.xe_store_d.get_pvc_tensor(
-            make_coord(m_offset, n_offset, l_offset),
-            make_shape(_, Int<FragsM>{}, Int<FragsN>{}));
 
     // Because Sm90 uses shared memory, they are not tied to using the same accumulator values
     // for MMA and Epilogue. But because we are operating directly in the accumulators, we need to be
@@ -334,7 +345,7 @@ public:
     // Get the fusion callbacks
     // Arguments passed here relate to sub-group tiles, rather than CTA (work-group) tiles
     constexpr bool RefSrc = true;
-    auto residue_mn = make_coord(M, N);
+    auto residue_mn = make_coord(M, N); //TODO(Codeplay): this is not correct
     auto cst_args = cutlass::epilogue::fusion::detail::ConsumerStoreArgs{
                       problem_shape_mnkl,
                       SubgroupTileShape{},
@@ -367,7 +378,8 @@ public:
       for (int epi_m = 0; epi_m < FragsM; epi_m++) {
 
         if (is_C_load_needed) {
-          copy(params.xe_load_c, rw_coord(_, epi_m, epi_n), trC);
+          //cordinates for C and D are the same
+          copy(params.xe_load_c, tCgD(_, epi_m, epi_n), trC);
         }
 
         cst_callbacks.previsit(epi_m, epi_n, 0, is_C_load_needed);
@@ -378,7 +390,7 @@ public:
         for (int epi_v = 0; epi_v < size(trD_frag); ++epi_v) {
           trD_frag(epi_v) = cst_callbacks.visit(acc_frag_mn(epi_v), epi_v, epi_m, epi_n);
         }
-        copy(params.xe_store_d, trD, rw_coord(_, epi_m, epi_n));
+        copy(params.xe_store_d, trD, tCgD(_, epi_m, epi_n));
       }
     }
 

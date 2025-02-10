@@ -96,9 +96,11 @@ public:
   static_assert(cute::rank(StrideO{}) == 3, "StrideO must be rank-3: [seq_len, head_size, batch * num_heads]");
 
   using Trait_O = Copy_Traits<GmemTiledCopyO>;
-  using XE_Copy_O = decltype(make_xe_2d_copy(Copy_Atom<Copy_Traits<CopyOpO, StrideO>, ElementO>{}.with(
-            make_tensor(make_gmem_ptr(static_cast<ElementO const*>(nullptr)), make_layout(make_shape(0, 0, 0), StrideO{}))),
-                                Layout<Shape<_1, Int<SubgroupSize>>>{}));
+  using XE_Copy_O = decltype(make_tiled_copy(Copy_Atom<Trait_O, ElementO>{}
+                                             .with(static_cast<ElementO const*>(nullptr),int32_t(0), int32_t(0)),
+                                             Layout<Shape<_1, Int<SubgroupSize>>>{},
+                                             make_layout(make_shape(get<0>(typename Trait_O::BlockShape{}),
+                                                                    get<1>(typename Trait_O::BlockShape{}) / Int<SubgroupSize>{}))));
 private:
   constexpr static bool is_destination_supported = not cute::is_void_v<ElementO>;
 
@@ -141,10 +143,13 @@ public:
     auto [batch, num_heads, seq_len, head_size] = problem_shape;
 
     XE_Copy_O xe_store_o = {};
-    xe_store_o = make_xe_2d_copy(Copy_Atom<Copy_Traits<CopyOpO, StrideO>, ElementO>{}.with(
-            make_tensor(make_gmem_ptr(static_cast<ElementO const*>(args.ptr_O)), make_layout(make_shape(seq_len, head_size, batch * num_heads), args.dO))),
-                                Layout<Shape<_1, Int<SubgroupSize>>>{});
-
+    xe_store_o = make_tiled_copy(Copy_Atom<Copy_Traits<CopyOpO, StrideO>, ElementO>{}.with(
+                                      make_tensor(make_gmem_ptr(static_cast<ElementO const*>(args.ptr_O)), 
+                                                  make_layout(make_shape(seq_len, head_size, batch * num_heads), 
+                                                  args.dO))),
+                                 Layout<Shape<_1, Int<SubgroupSize>>>{},
+                                 make_layout(make_shape(get<0>(typename Trait_O::BlockShape{}),
+                                                        get<1>(typename Trait_O::BlockShape{}) / Int<SubgroupSize>{})));
     return {
       xe_store_o,
       args.ptr_LSE
@@ -220,8 +225,10 @@ public:
 
     // Indexing variables
     auto [m_coord, n_coord, k_coord, l_coord] = tile_coord;
-    auto m_offset = m_coord * BLK_M + (get_sub_group_id() / ATOM_N) * SG_M;
-    auto n_offset = n_coord * BLK_N + (get_sub_group_id() % ATOM_N) * SG_N;
+    auto m_sg = get_sub_group_id() / ATOM_N;
+    auto n_sg = get_sub_group_id() % ATOM_N;
+    auto m_offset = m_coord * BLK_M + m_sg * SG_M;
+    auto n_offset = n_coord * BLK_N + n_sg * SG_N;
     auto l_offset = l_coord;
 
     CUTLASS_PRAGMA_UNROLL
@@ -242,12 +249,20 @@ public:
 
     // Indexing variables
     auto [batch, num_heads, seq_len, head_size] = problem_shape;
+    
+    // Represent the full output tensor
+    Tensor mO_mnl = params.xe_store_o.get_pvc_tensor(make_shape(batch, num_heads, head_size));
 
-    Tensor tOi = params.xe_store_o.get_pvc_tensor(
-            make_coord(m_offset, n_offset, l_coord),
-            make_shape(_, Int<FragsM>{}, Int<FragsN>{}));
+    // Tile the output tensor per WG
+    Tensor g_wg_O = local_tile(mO_mnl, select<0,1>(CtaTileMNK{}), make_coord(m_coord,n_coord,l_coord));             // (BLK_M,BLK_N,m,n,l)
+    
+    // Tile the output tensor per SG
+    Tensor gO = local_tile(g_wg_O, SubgroupTileShape{}, make_coord(m_sg,n_sg,_), Step<_1,_1, X>{});             // (BLK_M,BLK_N,m,n,l)
 
-    copy(params.xe_store_o, out, tOi);
+    auto thread_xe_store_o = params.xe_store_o.get_thread_slice(ThreadIdxX());
+    Tensor tOgO = thread_xe_store_o.partition_D(gO);
+
+    copy(params.xe_store_o, out, tOgO);
 
     const int lse_offset = m_offset + l_coord * seq_len;
 
