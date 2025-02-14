@@ -1,0 +1,32 @@
+name: install-dpctl
+description: Clone and build DPCTL
+inputs:
+  DPCPP_PATH:
+    description: Path to DPC++
+  VENV_PATH:
+    description: Path to virtualenv
+    
+runs:
+  using: "composite"
+  steps:
+    - name: Clone DPCTL
+      uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
+      with:
+        repository: 'sommerlukas/dpctl'
+        ref: 'additional-kernel-param-types'
+        path: '~/dpctl'
+
+    - name: Install DPCTL
+      id: install_dpctl
+      shell: bash
+      run: |
+        source ${{ inputs.VENV_PATH }}/bin/activate
+        pushd ~/dpctl
+        export DPCPP_PATH=${{ inputs.DPCPP_PATH }}
+        export PATH=$DPCPP_PATH/bin:$PATH
+        export LD_LIBRARY_PATH=$DPCPP_PATH/lib:$LD_LIBRARY_PATH
+        pip install --no-cache-dir numpy cython scikit-build cmake ninja pytest versioneer
+        python scripts/build_locally.py --c-compiler=$DPCPP_PATH/bin/clang \
+          --cxx-compiler=$DPCPP_PATH/bin/clang++ \
+          --compiler-root=$DPCPP_PATH/bin
+
