@@ -49,13 +49,13 @@ namespace collective {
 
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
-template <bool CausalMask_, class DispatchPolicy, class... Args> class CollectiveSoftmaxEpilogue {
+template <bool CausalMask_, int Vec_, int FragsM_, int FragsN_, class DispatchPolicy, class... Args> class CollectiveSoftmaxEpilogue {
   static_assert(cutlass::detail::dependent_false<DispatchPolicy>, "Could not find an epilogue specialization.");
 };
 
 
-template <bool CausalMask_, class Element_>
-class CollectiveSoftmaxEpilogue<CausalMask_, IntelPVCEpilogue, Element_> {
+template <bool CausalMask_, int Vec_, int FragsM_, int FragsN_, class Element_>
+class CollectiveSoftmaxEpilogue<CausalMask_, Vec_, FragsM_, FragsN_, IntelPVCEpilogue, Element_> {
 public:
 
   //
@@ -65,6 +65,9 @@ public:
   using Element = Element_;
 
   static constexpr bool CausalMask = CausalMask_;
+  static constexpr int Vec = Vec_;
+  static constexpr int FragsM = FragsM_;
+  static constexpr int FragsN = FragsN_;
 
   using GmemTiledCopyOut = void;
 
@@ -103,7 +106,7 @@ public:
   CUTLASS_HOST_DEVICE
   CollectiveSoftmaxEpilogue(Params const &params_) : params(params_) {}
 
-  template <int Vec, int FragsM, int FragsN, class FragAcc, class FragMax, class FragSum>
+  template <class FragAcc, class FragMax, class FragSum>
   CUTLASS_DEVICE void scale_exp_log2(FragAcc &frag_s, FragMax const &max, FragSum &sum) {
     auto g = syclcompat::get_nd_item<1>().get_sub_group();
     const auto max_scale = max * params.scale;
@@ -120,7 +123,7 @@ public:
     }
   }
 
-  template <int Vec, int FragsM, int FragsN, class FragSrc, class FragMax>
+  template <class FragSrc, class FragMax>
   CUTLASS_DEVICE void reduce_max(FragSrc &src, FragMax &max) {
     auto g = syclcompat::get_nd_item<1>().get_sub_group();
     CUTLASS_PRAGMA_UNROLL
@@ -139,10 +142,10 @@ public:
     }
   }
 
-  template <int Vec, int FragsM, int FragsN, class FragAcc, class FragMax, class FragSum, class FragOut>
+  template <class FragAcc, class FragMax, class FragSum, class FragOut>
   CUTLASS_DEVICE void operator()(bool is_first, FragAcc &frag_s, FragMax &max, FragSum &sum, FragOut &out) {
     auto max_prev = max;
-    reduce_max<Vec, FragsM, FragsN>(frag_s, max);
+    reduce_max(frag_s, max);
     static_assert(Vec * FragsM == 16, " the number of reg_max per workitem should be adopted accordingly.");
     if (!is_first) {
       auto g = syclcompat::get_nd_item<1>().get_sub_group();
@@ -162,7 +165,7 @@ public:
         }
       }
     } else {
-      scale_exp_log2<Vec, FragsM, FragsN>(frag_s, max, sum);
+      scale_exp_log2(frag_s, max, sum);
     }
   }
   Params params;
