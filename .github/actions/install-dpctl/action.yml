@@ -19,6 +19,9 @@ runs:
       shell: bash
       run: |
         export DPCTL_PATH=${{ inputs.DPCTL_PATH }}
+        if [[ ! -e "/lib/x86_64-linux-gnu/libOpenCL.so" ]]; then
+          sudo ln -s "/lib/x86_64-linux-gnu/libOpenCL.so.1" "/lib/x86_64-linux-gnu/libOpenCL.so"
+        fi
         git clone --depth=1 --branch ${{ inputs.DPCTL_BRANCH }} ${{ inputs.DPCTL_URL }} $DPCTL_PATH
         pushd $DPCTL_PATH
         source ${{ inputs.VENV_PATH }}/bin/activate
