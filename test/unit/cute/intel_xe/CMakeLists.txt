@@ -34,6 +34,7 @@ cutlass_test_unit_add_executable(
   copy_block.cpp
   copy_scatter.cpp
   mma.cpp
+  tiled_mma.cpp
   gemm_partition_src_dst.cpp
   gemm_partition_fragment_abc.cpp
   gemm_tiled_copy_abc.cpp

@@ -606,6 +606,46 @@ make_tiled_mma(MMA_Op       const&,
   return make_tiled_mma(MMA_Atom<MMA_Op>{}, thr_layout, permutations);
 }
 
+// This helper fn adopts the approach described in
+// media/docs/cute/0t_mma_atom.md#tiledmmas to construct a scatter
+// permutation which ensures all sub-groups operate on contiguous
+// chunks of the MMA. The docs describe how the Layout
+// (i.e. SubgroupLayout) implies a repetition of the atom across additional
+// hardware. Permutations, in the simplest form, imply additional iterations
+// to cover a larger tile (i.e. CTATileShape) than the hardware can handle
+// at once. By specifying additional modes and strides, we can achieve 
+// arbitrary TiledMMA layouts.
+template <typename MMA_Atom, typename CTATileShape, typename SubgroupLayout>
+struct ContigBlockMMAHelper{
+private:
+  using AtomShape = typename MMA_Atom::Shape_MNK;
+
+  // Represents the canonical MMA block which would be handled
+  // by these subgroups without permutation info...
+  static constexpr auto DefaultBlock =
+      blocked_product(Layout<AtomShape>{}, SubgroupLayout{});
+
+  // Discard strides and internal modes, e.g. (8,8):(1,8) -> 64
+  static constexpr auto DefaultTiler =
+      make_shape(size<0>(DefaultBlock), size<1>(DefaultBlock),
+                size<2>(DefaultBlock));
+
+  // Construct the default tiled MMA, to extract the iteration count per dim below
+  static constexpr auto DefaultTiling = logical_divide(Layout<CTATileShape>{}, DefaultTiler);
+
+  static constexpr auto permutation =
+      transform(AtomShape{}, SubgroupLayout{}.shape(), DefaultTiling.shape(),
+                [](auto a, auto sg, auto dt) {
+                  constexpr auto iters = get<1>(dt);
+                  auto tiler_shape = make_shape(a, sg, iters);                     // atom, hardware, iteration
+                  auto tiler_stride = make_stride(_1{}, Int<a*iters>{}, Int<a>{}); // atom, hardware, iteration
+                  return coalesce(make_layout(tiler_shape, tiler_stride));
+                });
+public:
+  using Permutation = decltype(permutation);
+  using TiledMMA = TiledMMA<MMA_Atom, SubgroupLayout, Permutation>;
+};
+
 //
 // partition_fragment_C -- static context
 //
