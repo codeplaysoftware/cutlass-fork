@@ -24,6 +24,7 @@ runs:
         fi
         echo $PATH
         echo $INCLUDE
+        export INCLUDE=lib/x86_64-linux-gnu:$INCLUDE
         git clone --depth=1 --branch ${{ inputs.DPCTL_BRANCH }} ${{ inputs.DPCTL_URL }} $DPCTL_PATH
         pushd $DPCTL_PATH
         source ${{ inputs.VENV_PATH }}/bin/activate
