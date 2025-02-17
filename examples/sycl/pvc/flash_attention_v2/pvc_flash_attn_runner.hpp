@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
+ * Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,10 +31,10 @@
 #pragma once
 
 #include "cutlass/epilogue/collective/default_epilogue.hpp"
-#include "cutlass/epilogue/fusion/xe_callbacks.hpp"
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
-#include "pvc_flash_attn_gemm_universal.hpp"
-#include "pvc_flash_attn_epilogue.hpp"
+#include "flash_attention_v2/kernel/xe_flash_attn_gemm.hpp"
+#include "flash_attention_v2/collective/xe_flash_attn_epilogue.hpp"
+#include "flash_attention_v2/collective/xe_flash_attn_softmax_epilogue.hpp"
 #include "cutlass/util/GPU_Clock.hpp"
 #include "cutlass/util/sycl_event_manager.hpp"
 
@@ -397,6 +397,26 @@ template <bool Causal, typename TileShape, typename TiledMma> struct FMHAConfig 
     using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelPVC<PipelineStages>;
     using EpilogueDispatchPolicy = cutlass::epilogue::IntelPVCEpilogue;
 
+    static constexpr auto BLK_M = get<0>(TileShape{}); // 128
+    static constexpr auto BLK_N = get<1>(TileShape{}); // 64
+    static constexpr auto BLK_K = get<2>(TileShape{}); // 32
+
+    static constexpr auto ATOM_M = get<1>(typename TiledMma::ThrLayoutVMNK{}.shape()); // 8
+    static constexpr auto ATOM_N = get<2>(typename TiledMma::ThrLayoutVMNK{}.shape()); // 1
+    static constexpr auto ATOM_K = get<3>(typename TiledMma::ThrLayoutVMNK{}.shape()); // 1
+
+    static constexpr auto SG_M = ceil_div(BLK_M, ATOM_M); // 16
+    static constexpr auto SG_N = ceil_div(BLK_N, ATOM_N); // 64
+    static constexpr auto SG_K = ceil_div(BLK_K, ATOM_K); // 64
+    using SubgroupTileShape = Shape<decltype(SG_M), decltype(SG_N), decltype(SG_K)>;
+
+    static constexpr int SubgroupSize = GEMMDispatchPolicy::SubgroupSize;
+
+    using MmaAtomShape = typename TiledMma::AtomShape_MNK;
+    static constexpr int Vec = (get<0>(MmaAtomShape()) * get<1>(MmaAtomShape())) / SubgroupSize; // 8
+    static constexpr int FragsM = get<0>(SubgroupTileShape{}) / get<0>(MmaAtomShape());          // 2
+    static constexpr int FragsN = get<1>(SubgroupTileShape{}) / get<1>(MmaAtomShape());          // 4
+
     using GmemTiledCopyQ = XE_2D_U16x16x32_LD_N;
     using GmemTiledCopyK = XE_2D_U16x16x16_LD_T;
     using GmemTiledCopyV = XE_2D_U16x32x32_LD_V;
@@ -404,6 +424,7 @@ template <bool Causal, typename TileShape, typename TiledMma> struct FMHAConfig 
     using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogueAttention<
         EpilogueDispatchPolicy, TileShape, ElementAccumulator, cutlass::gemm::TagToStrideC_t<LayoutO>, ElementOutput,
         GmemTiledCopyStore>;
+    using CollectiveSoftmaxEpilogue = cutlass::epilogue::collective::CollectiveSoftmaxEpilogue<Causal, Vec, FragsM, FragsN, EpilogueDispatchPolicy, ElementAccumulator>;
 
     // Mainloop
     using CollectiveMainloop = cutlass::gemm::collective::CollectiveMmaAttention<
@@ -415,7 +436,7 @@ template <bool Causal, typename TileShape, typename TiledMma> struct FMHAConfig 
         Causal>;
 
     using GemmKernel = cutlass::gemm::kernel::GemmUniversalAttention<Shape<int, int, int, int>, CollectiveMainloop,
-                                                                     CollectiveEpilogue>;
+                                                                     CollectiveSoftmaxEpilogue, CollectiveEpilogue>;
 
     ExampleRunner<GemmKernel> runner;
 
