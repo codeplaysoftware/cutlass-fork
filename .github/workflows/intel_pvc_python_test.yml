@@ -37,6 +37,7 @@ jobs:
         uses: ./.github/actions/install-dpcpp
         with:
           DPCPP_VERSION: ${{ inputs.DPCPP_VERSION }}
+          DPCPP_PATH: ~/dpcpp
       - name: Setup virtual environment
         shell: bash
         run: |
@@ -45,7 +46,10 @@ jobs:
         id: install_dpctl
         uses: ./.github/actions/install-dpctl
         with:
-          DPCPP_PATH: ${{ steps.install_dpcpp.outputs.DPCPP_PATH }}
+          DPCTL_URL: https://github.com/sommerlukas/dpctl.git
+          DPCTL_BRANCH: additional-kernel-param-types
+          DPCTL_PATH: ~/dpctl
+          DPCPP_PATH: ~/dpcpp
           VENV_PATH: ~/.venv
       - name: Install Torch XPU
         shell: bash
@@ -56,7 +60,7 @@ jobs:
       - name: Run Python Interface GEMM Tests
         shell: bash
         run: |
-          export DPCPP_PATH=${{ steps.install_dpcpp.outputs.DPCPP_PATH }}
+          export DPCPP_PATH=~/dpcpp
           export PATH=$DPCPP_PATH/bin:$PATH
           export LD_LIBRARY_PATH=$DPCPP_PATH/lib:$LD_LIBRARY_PATH
           source ~/.venv/bin/activate

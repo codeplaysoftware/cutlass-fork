@@ -1,6 +1,12 @@
 name: install-dpctl
 description: Clone and build DPCTL
 inputs:
+  DPCTL_URL:
+    description: URL of the DPCTL repository to use.
+  DPCTL_BRANCH:
+    description: Name of the DPCTL branch to use.
+  DPCTL_PATH:
+    description: Path where to put DPCTL
   DPCPP_PATH:
     description: Path to DPC++
   VENV_PATH:
@@ -9,19 +15,13 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Clone DPCTL
-      uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29 # v4.1.6
-      with:
-        repository: 'sommerlukas/dpctl'
-        ref: 'additional-kernel-param-types'
-        path: '~/dpctl'
-
-    - name: Install DPCTL
-      id: install_dpctl
+    - name: Clone and install DPCTL
       shell: bash
       run: |
+        export DPCTL_PATH=${{ inputs.DPCTL_PATH }}
+        git clone --depth=1 --branch ${{ inputs.DPCTL_BRANCH }} ${{ inputs.DPCTL_URL }} $DPCTL_PATH
+        pushd $DPCTL_PATH
         source ${{ inputs.VENV_PATH }}/bin/activate
-        pushd ~/dpctl
         export DPCPP_PATH=${{ inputs.DPCPP_PATH }}
         export PATH=$DPCPP_PATH/bin:$PATH
         export LD_LIBRARY_PATH=$DPCPP_PATH/lib:$LD_LIBRARY_PATH
