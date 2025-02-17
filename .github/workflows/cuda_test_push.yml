@@ -1,9 +1,7 @@
-name: "Cuda Test"
+name: "Cuda Test push"
 
 on:
-  pull_request:
-    branches: [ "sycl-develop" ]
-  merge_group:
+  push:
     branches: [ "sycl-develop" ]
   workflow_dispatch:
 
@@ -17,7 +15,7 @@ jobs:
   run-tests:
     name: Run cuda tests
     runs-on: cp-nvidia-gpu
-    timeout-minutes: 120
+    timeout-minutes: 240
 
     steps:
       - name: Checkout repository
@@ -29,6 +27,7 @@ jobs:
           nvidia-smi
           export CUDACXX=/usr/local/cuda/bin/nvcc
           cmake -G Ninja -DCUTLASS_NVCC_ARCHS="90a"
+          cmake --build . -j 48
 
       - name: Unit test
         shell: bash
