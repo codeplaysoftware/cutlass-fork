@@ -50,6 +50,7 @@
 #include "cutlass/coord.h"
 
 #include "common.hpp"
+#include "helper.h"
 
 using namespace cute;
 
@@ -282,7 +283,7 @@ struct ExampleRunner {
        block_C.get(), block_C.size(), seed + 2021, (ElementC)1, (ElementC)0, 0);
   }
 
-  void run(const Options& options, const cutlass::KernelHardwareInfo& hw_info) {
+  Status run(const Options &options, const cutlass::KernelHardwareInfo &hw_info) {
     ProblemShapeType problem_size = ProblemShapeType{options.m, options.n, options.k, options.l};
 
     initialize(problem_size);
@@ -306,10 +307,10 @@ struct ExampleRunner {
 
     gemm_op.can_implement(arguments);
 
-    gemm_op.initialize(arguments, workspace.get());
+    CUTLASS_CHECK(gemm_op.initialize(arguments, workspace.get()));
 
     // Run the GEMM
-    gemm_op.run();
+    CUTLASS_CHECK(gemm_op.run());
 
     syclcompat::wait();
 
@@ -317,7 +318,11 @@ struct ExampleRunner {
     bool passed = verify(problem_size, options.alpha, options.beta);
     std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
 
-    if (passed && options.iterations > 0) {
+    if(!passed) {
+      return cutlass::Status::kErrorInternal;
+    }
+
+    if (options.iterations > 0) {
       GPU_Clock timer;
       timer.start();
       for (int i = 0; i < options.iterations; ++i) {
@@ -335,7 +340,7 @@ struct ExampleRunner {
       printf("Cutlass GEMM Performance:     %4.3f   GB/s  ,   %4.3f  TF/s  , %6.4f  ms\n", io / cute_time, tflops/cute_time,  cute_time*1000);
     }
 
-    return;
+    return Status::kSuccess;
   }
 
 };
@@ -443,7 +448,7 @@ int main(int argc, const char** argv)
 
   ExampleRunner<Gemm> runner;
 
-  runner.run(options, hw_info);
+  CUTLASS_CHECK(runner.run(options, hw_info));
 
   return 0;
 }
