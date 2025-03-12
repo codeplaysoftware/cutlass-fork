@@ -54,6 +54,19 @@
   }
 #endif
 
+#ifdef SYCL_INTEL_TARGET
+SYCL_EXTERNAL __attribute__((convergent)) void __spirv_Subgroup2DBlockLoadINTEL(int ElementSize, int BlockWidth, int BlockHeight, int BlockCount, 
+    const void* src_base_pointer, int memory_width, int memory_height, int memory_pitch,  cute::intel::coord_t coordinate, void* dst_pointer);
+SYCL_EXTERNAL __attribute__((convergent)) void __spirv_Subgroup2DBlockLoadTransformINTEL(int ElementSize, int BlockWidth, int BlockHeight, int BlockCount, 
+    const void* src_base_pointer, int memory_width, int memory_height, int memory_pitch,  cute::intel::coord_t coordinate, void* dst_pointer);
+SYCL_EXTERNAL __attribute__((convergent)) void __spirv_Subgroup2DBlockLoadTransposeINTEL(int ElementSize, int BlockWidth, int BlockHeight, int BlockCount, 
+    const void* src_base_pointer, int memory_width, int memory_height, int memory_pitch,  cute::intel::coord_t coordinate, void* dst_pointer);
+SYCL_EXTERNAL __attribute__((convergent)) void __spirv_Subgroup2DBlockStoreINTEL(int ElementSize, int BlockWidth, int BlockHeight, int BlockCount, 
+    void* src_pointer, const void* dst_base_pointer, int memory_width, int memory_height, int memory_pitch,  cute::intel::coord_t coordinate);    
+SYCL_EXTERNAL __attribute__((convergent)) void __spirv_Subgroup2DBlockPrefetchINTEL(int ElementSize, int BlockWidth, int BlockHeight, int BlockCount, 
+    const void* src_base_pointer, int memory_width, int memory_height, int memory_pitch,  cute::intel::coord_t coordinate);
+#endif
+
 enum class CacheControl {
     kDefault   = 0,
     kL1UC_L3UC = 1, // Override to L1 uncached and L3 uncached
@@ -116,31 +129,6 @@ SYCL_DEVICE_BUILTIN(
         long baseoffset, int width_minus_one, int height_minus_one,
         int pitch_minus_one, cute::intel::coord_t coord));
 
-// 32bits No transform No transpose
-SYCL_DEVICE_BUILTIN(uint __builtin_IB_subgroup_block_read_flat_u32_m1k16v1(
-    long baseoffset, int width_minus_one, int height_minus_one,
-    int pitch_minus_one, cute::intel::coord_t coord));
-SYCL_DEVICE_BUILTIN(
-    cute::intel::uint2 __builtin_IB_subgroup_block_read_flat_u32_m2k16v1(
-        long baseoffset, int width_minus_one, int height_minus_one,
-        int pitch_minus_one, cute::intel::coord_t coord));
-SYCL_DEVICE_BUILTIN(
-    cute::intel::uint4 __builtin_IB_subgroup_block_read_flat_u32_m4k16v1(
-        long baseoffset, int width_minus_one, int height_minus_one,
-        int pitch_minus_one, cute::intel::coord_t coord));
-SYCL_DEVICE_BUILTIN(
-    cute::intel::uint8 __builtin_IB_subgroup_block_read_flat_u32_m8k16v1(
-        long baseoffset, int width_minus_one, int height_minus_one,
-        int pitch_minus_one, cute::intel::coord_t coord));
-SYCL_DEVICE_BUILTIN(
-    cute::intel::uint16 __builtin_IB_subgroup_block_read_flat_u32_m16k16v1(
-        long baseoffset, int width_minus_one, int height_minus_one,
-        int pitch_minus_one, cute::intel::coord_t coord));
-SYCL_DEVICE_BUILTIN(
-    cute::intel::uint32 __builtin_IB_subgroup_block_read_flat_u32_m32k16v1(
-        long baseoffset, int width_minus_one, int height_minus_one,
-        int pitch_minus_one, cute::intel::coord_t coord));
-
 // 32bits No transform Transpose
 SYCL_DEVICE_BUILTIN(uint __builtin_IB_subgroup_block_read_flat_transpose_u32_k1(
     long baseoffset, int width_minus_one, int height_minus_one,
@@ -153,119 +141,8 @@ SYCL_DEVICE_BUILTIN(
     cute::intel::uint4 __builtin_IB_subgroup_block_read_flat_transpose_u32_k4(
         long baseoffset, int width_minus_one, int height_minus_one,
         int pitch_minus_one, cute::intel::coord_t coord));
-SYCL_DEVICE_BUILTIN(
-    cute::intel::uint8 __builtin_IB_subgroup_block_read_flat_transpose_u32_k8(
-        long baseoffset, int width_minus_one, int height_minus_one,
-        int pitch_minus_one, cute::intel::coord_t coord));
-
-// 32bits
-SYCL_DEVICE_BUILTIN(void __builtin_IB_subgroup_block_write_flat_u32_m1k16v1(
-    long baseoffset, int width_minus_one, int height_minus_one,
-    int pitch_minus_one, cute::intel::coord_t coord, uint data));
-SYCL_DEVICE_BUILTIN(void __builtin_IB_subgroup_block_write_flat_u32_m2k16v1(
-    long baseoffset, int width_minus_one, int height_minus_one,
-    int pitch_minus_one, cute::intel::coord_t coord, cute::intel::uint2 data));
-SYCL_DEVICE_BUILTIN(void __builtin_IB_subgroup_block_write_flat_u32_m4k16v1(
-    long baseoffset, int width_minus_one, int height_minus_one,
-    int pitch_minus_one, cute::intel::coord_t coord, cute::intel::uint4 data));
-SYCL_DEVICE_BUILTIN(void __builtin_IB_subgroup_block_write_flat_u32_m8k16v1(
-    long baseoffset, int width_minus_one, int height_minus_one,
-    int pitch_minus_one, cute::intel::coord_t coord, cute::intel::uint8 data));
 
 #undef SYCL_DEVICE_BUILTIN
-
-#undef __global
-#define __global __attribute__((opencl_global))
-// 32bits specific for tf32 No transform No transpose
-SYCL_DEVICE_OCL(uint intel_sub_group_block_read_32b_1r8c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(uint intel_sub_group_block_read_32b_2r8c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint2 intel_sub_group_block_read_32b_4r8c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint4 intel_sub_group_block_read_32b_8r8c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint8 intel_sub_group_block_read_32b_16r8c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint16 intel_sub_group_block_read_32b_32r8c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-
-SYCL_DEVICE_OCL(cute::intel::uint2 intel_sub_group_block_read_32b_1r8x2c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint2 intel_sub_group_block_read_32b_2r8x2c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint4 intel_sub_group_block_read_32b_4r8x2c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint8 intel_sub_group_block_read_32b_8r8x2c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint16 intel_sub_group_block_read_32b_16r8x2c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint32 intel_sub_group_block_read_32b_32r8x2c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-
-// 32bits No transform No transpose
-SYCL_DEVICE_OCL(uint intel_sub_group_block_read_32b_1r16c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint2 intel_sub_group_block_read_32b_2r16c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint4 intel_sub_group_block_read_32b_4r16c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint8 intel_sub_group_block_read_32b_8r16c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint16 intel_sub_group_block_read_32b_16r16c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint32 intel_sub_group_block_read_32b_32r16c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-
-// 32bits No transform Transpose
-SYCL_DEVICE_OCL(uint intel_sub_group_block_read_transpose_32b_16r1c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint2 intel_sub_group_block_read_transpose_32b_16r2c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint4 intel_sub_group_block_read_transpose_32b_16r4c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::uint8 intel_sub_group_block_read_transpose_32b_16r8c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-
-// 32bits store
-SYCL_DEVICE_OCL(void intel_sub_group_block_write_32b_1r16c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord, uint data));
-SYCL_DEVICE_OCL(void intel_sub_group_block_write_32b_2r16c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord, cute::intel::uint2 data));
-SYCL_DEVICE_OCL(void intel_sub_group_block_write_32b_4r16c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord, cute::intel::uint4 data));
-SYCL_DEVICE_OCL(void intel_sub_group_block_write_32b_8r16c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord, cute::intel::uint8 data));
-SYCL_DEVICE_OCL(void intel_sub_group_2d_block_prefetch_32b_16r8x1c(
-    __global void* base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-#undef SYCL_DEVICE_OCL
 
 namespace cute
 {
@@ -276,13 +153,13 @@ struct XE_2D_U32x1x16_LD_N {
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                     int height, int pitch, intel::coord_t coord,
                                     T *dst) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    *reinterpret_cast<uint *>(dst) =
-        __builtin_IB_subgroup_block_read_flat_u32_m1k16v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+    __spirv_Subgroup2DBlockLoadINTEL(4, 16, 1, 1, baseoffset, width, height, pitch, coord, (void*)dst);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -294,13 +171,13 @@ struct XE_2D_U32x2x16_LD_N {
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                     int height, int pitch, intel::coord_t coord,
                                     T *dst) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    *reinterpret_cast<intel::uint2 *>(dst) =
-        __builtin_IB_subgroup_block_read_flat_u32_m2k16v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+    __spirv_Subgroup2DBlockLoadINTEL(4, 16, 2, 1, baseoffset, width, height, pitch, coord, (void*)dst);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -312,13 +189,13 @@ struct XE_2D_U32x4x16_LD_N {
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                     int height, int pitch, intel::coord_t coord,
                                     T *dst) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    *reinterpret_cast<intel::uint4 *>(dst) =
-        __builtin_IB_subgroup_block_read_flat_u32_m4k16v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+    __spirv_Subgroup2DBlockLoadINTEL(4, 16, 4, 1, baseoffset, width, height, pitch, coord, (void*)dst);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -330,13 +207,13 @@ struct XE_2D_U32x8x16_LD_N {
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                     int height, int pitch, intel::coord_t coord,
                                     T *dst) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    *reinterpret_cast<intel::uint8 *>(dst) =
-        __builtin_IB_subgroup_block_read_flat_u32_m8k16v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+    __spirv_Subgroup2DBlockLoadINTEL(4, 16, 8, 1, baseoffset, width, height, pitch, coord, (void*)dst);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -348,13 +225,13 @@ struct XE_2D_U32x16x16_LD_N {
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                     int height, int pitch, intel::coord_t coord,
                                     T *dst) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    *reinterpret_cast<intel::uint16 *>(dst) =
-        __builtin_IB_subgroup_block_read_flat_u32_m16k16v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+    __spirv_Subgroup2DBlockLoadINTEL(4, 16, 16, 1, baseoffset, width, height, pitch, coord, (void*)dst);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -366,13 +243,13 @@ struct XE_2D_U32x32x16_LD_N {
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                     int height, int pitch, intel::coord_t coord,
                                     T *dst) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    *reinterpret_cast<intel::uint32 *>(dst) =
-        __builtin_IB_subgroup_block_read_flat_u32_m32k16v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+    __spirv_Subgroup2DBlockLoadINTEL(4, 16, 32, 1, baseoffset, width, height, pitch, coord, (void*)dst);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -587,12 +464,13 @@ struct XE_2D_TF32x16x16_LD_N {
     CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                         int height, int pitch,
                                         intel::coord_t coord) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
-      intel_sub_group_2d_block_prefetch_32b_16r8x1c(
-          (__global void*)baseoffset, width - 1, height - 1, pitch - 1, coord);
+      __spirv_Subgroup2DBlockPrefetchINTEL(4, 16, 16, 1, (const void*)baseoffset, width, height, pitch, coord);
 #else
       CUTE_INVALID_CONTROL_PATH(
               "Trying to use block prefetch on non-Xe hardware");
+#endif
 #endif
     }
   };
@@ -625,13 +503,13 @@ struct XE_2D_U32x16x1_LD_T {
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                     int height, int pitch, intel::coord_t coord,
                                     T *dst) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    *reinterpret_cast<uint *>(dst) =
-        __builtin_IB_subgroup_block_read_flat_transpose_u32_k1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+    __spirv_Subgroup2DBlockLoadTransposeINTEL(4, 1, 16, 1, (const void*)baseoffset, width, height, pitch, coord, (void*)dst);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -645,6 +523,7 @@ struct XE_2D_U32x16x2_LD_T {
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                     int height, int pitch, intel::coord_t coord,
                                     T *dst) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
     *reinterpret_cast<intel::uint2 *>(dst) =
@@ -652,6 +531,7 @@ struct XE_2D_U32x16x2_LD_T {
             (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -665,6 +545,7 @@ struct XE_2D_U32x16x4_LD_T {
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                     int height, int pitch, intel::coord_t coord,
                                     T *dst) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
     *reinterpret_cast<intel::uint4 *>(dst) =
@@ -672,6 +553,7 @@ struct XE_2D_U32x16x4_LD_T {
             (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -685,13 +567,13 @@ struct XE_2D_U32x16x8_LD_T {
   CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                     int height, int pitch, intel::coord_t coord,
                                     T *dst) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    *reinterpret_cast<intel::uint8 *>(dst) =
-        __builtin_IB_subgroup_block_read_flat_transpose_u32_k8(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+    __spirv_Subgroup2DBlockLoadTransposeINTEL(4, 8, 16, 1, (const void*)baseoffset, width, height, pitch, coord, (void*)dst);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 
@@ -699,12 +581,13 @@ struct XE_2D_U32x16x8_LD_T {
     CUTE_HOST_DEVICE static void copy(const void *baseoffset, int width,
                                       int height, int pitch,
                                       intel::coord_t coord) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
-      intel_sub_group_2d_block_prefetch_32b_16r8x1c(
-          (__global void*)baseoffset, width - 1, height - 1, pitch - 1, coord);
+      __spirv_Subgroup2DBlockPrefetchINTEL(2, 16, 8, 1, (const void*)baseoffset, width, height, pitch, coord);
 #else
       CUTE_INVALID_CONTROL_PATH(
           "Trying to use block prefetch on non-PVC hardware");
+#endif
 #endif
     }
   };
@@ -717,13 +600,13 @@ struct XE_2D_U32x1x16_ST_N {
   CUTE_HOST_DEVICE static void copy(void *baseoffset, int width, int height,
                                     int pitch, intel::coord_t coord,
                                     const T *src) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     // static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    __builtin_IB_subgroup_block_write_flat_u32_m1k16v1(
-        (long)(baseoffset), width - 1, height - 1, pitch - 1, coord,
-        *(uint *)(src));
+    __spirv_Subgroup2DBlockStoreINTEL(4, 16, 1, 1, (void*)src, (const void*)baseoffset, width, height, pitch, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -735,13 +618,13 @@ struct XE_2D_U32x2x16_ST_N {
   CUTE_HOST_DEVICE static void copy(void *baseoffset, int width, int height,
                                     int pitch, intel::coord_t coord,
                                     const T *src) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    __builtin_IB_subgroup_block_write_flat_u32_m2k16v1(
-        (long)(baseoffset), width - 1, height - 1, pitch - 1, coord,
-        *(intel::uint2 *)(src));
+    __spirv_Subgroup2DBlockStoreINTEL(4, 16, 2, 1, (void*)src, (const void*)baseoffset, width, height, pitch, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -753,13 +636,13 @@ struct XE_2D_U32x4x16_ST_N {
   CUTE_HOST_DEVICE static void copy(void *baseoffset, int width, int height,
                                     int pitch, intel::coord_t coord,
                                     const T *src) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    __builtin_IB_subgroup_block_write_flat_u32_m4k16v1(
-        (long)(baseoffset), width - 1, height - 1, pitch - 1, coord,
-        *(intel::uint4 *)(src));
+    __spirv_Subgroup2DBlockStoreINTEL(4, 16, 4, 1, (void*)src, (const void*)baseoffset, width, height, pitch, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
@@ -771,13 +654,13 @@ struct XE_2D_U32x8x16_ST_N {
   CUTE_HOST_DEVICE static void copy(void *baseoffset, int width, int height,
                                     int pitch, intel::coord_t coord,
                                     const T *src) {
+#ifdef __SYCL_DEVICE_ONLY__
 #if defined(SYCL_INTEL_TARGET)
     // static_assert(sizeof(T) == 4, "Expected T to have size 4");
-    __builtin_IB_subgroup_block_write_flat_u32_m8k16v1(
-        (long)(baseoffset), width - 1, height - 1, pitch - 1, coord,
-        *(intel::uint8 *)(src));
+    __spirv_Subgroup2DBlockStoreINTEL(4, 16, 8, 1, (void*)src, (const void*)baseoffset, width, height, pitch, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
+#endif
 #endif
   }
 };
