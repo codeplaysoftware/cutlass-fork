@@ -1,5 +1,5 @@
 /***************************************************************************************************
- * Copyright (c) 2024 - 2025 Codeplay Software Ltd. All rights reserved.
+ * Copyright (c) 2024 - 2024 Codeplay Software Ltd. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,6 +31,7 @@
 #pragma once
 
 #include "cutlass/epilogue/collective/default_epilogue.hpp"
+#include "cutlass/epilogue/fusion/xe_callbacks.hpp"
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "flash_attention_v2/kernel/xe_flash_attn_gemm.hpp"
 #include "flash_attention_v2/collective/xe_flash_attn_epilogue.hpp"
@@ -46,71 +47,64 @@
 #include "cutlass/util/packed_stride.hpp"
 #include "cutlass/util/reference/device/gemm_complex.h"
 #include "cutlass/util/reference/device/tensor_compare.h"
-#include "../common.hpp"
+#include "../examples/sycl/pvc/common.hpp"
+
+#include "../benchmarks/benchmark_runner.hpp"
 
 using namespace cute;
 
-// Command line options parsing
-struct Options {
+namespace cutlass::benchmark {
 
-  bool help;
+// Command line options parsing
+struct FMHAOptions {
+
   bool error;
-  bool is_causal;
 
   int batch, num_heads, seq_len, head_size, iterations;
   float softmax_scale;
+  std::string bm_name;
 
-  Options()
-      : help(false), error(false), is_causal(false), batch(32), num_heads(16), seq_len(512), head_size(128),
-        iterations(100), softmax_scale(1.f) {}
+  FMHAOptions()
+      : error(false), batch(32), num_heads(16), seq_len(512), head_size(128),
+        iterations(100), softmax_scale(1.f), bm_name("Flash Attention v2") {}
 
   // Parses the command line
   void parse(int argc, char const **args) {
     cutlass::CommandLine cmd(argc, args);
-
-    if (cmd.check_cmd_line_flag("help")) {
-      help = true;
-      return;
-    }
-
-    if (cmd.check_cmd_line_flag("is_causal")) {
-      is_causal = true;
-    }
 
     cmd.get_cmd_line_argument("batch", batch, 32);
     cmd.get_cmd_line_argument("num_heads", num_heads, 16);
     cmd.get_cmd_line_argument("seq_len", seq_len, 512);
     cmd.get_cmd_line_argument("head_size", head_size, 128);
     cmd.get_cmd_line_argument("iterations", iterations, 100);
+    cmd.get_cmd_line_argument("bm_name", bm_name, std::string("Flash Attention v2"));
 
-    softmax_scale = 1 / sqrt(static_cast<float>(head_size));
+    softmax_scale = 1 / std::sqrt(static_cast<float>(head_size));
   }
 
-  /// Prints the usage statement.
-  std::ostream &print_usage(std::ostream &out) const {
+  std::string benchmark_name() const {
+    std::stringstream full_name;
+    full_name << bm_name << "/";
+    std::string const test_name_suffix = std::to_string(batch) + "x" +
+                                   std::to_string(num_heads) + "x" +
+                                   std::to_string(seq_len) + "x" +
+                                   std::to_string(head_size);
+    full_name << test_name_suffix;
 
-    out << "PVC Flash Attention v2 Example\n\n"
-        << "Options:\n\n"
-        << "  --help                      If specified, displays this usage statement\n\n"
-        << "  --is_causal                 Apply Causal Mask to the output of first Matmul\n"
-        << "  --batch=<int>               Sets the Batch Size of the Multi-Head Self Attention module\n"
-        << "  --num_heads=<int>           Sets the Number of Attention Heads of the Multi-Head Self Attention module\n"
-        << "  --seq_len=<int>             Sets the Sequence length of the Multi-Head Self Attention module\n"
-        << "  --head_size=<int>           Sets the Attention Head dimension of the Multi-Head Self Attention module\n"
-        << "  --iterations=<int>          Iterations\n\n";
-
-    return out;
+    return full_name.str();
   }
 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
-using LayoutQ = cutlass::layout::RowMajor;
-using LayoutK = cutlass::layout::ColumnMajor;
-using LayoutV = cutlass::layout::RowMajor;
-using LayoutO = cutlass::layout::RowMajor;
+template <class FMHAConfiguration> struct BenchmarkRunnerFMHA {
 
-template <class GemmKernel> struct ExampleRunner {
+  using GemmKernel = typename FMHAConfiguration::GemmKernel;
+  
+  using LayoutQ = typename FMHAConfiguration::LayoutQ;
+  using LayoutK = typename FMHAConfiguration::LayoutK;
+  using LayoutV = typename FMHAConfiguration::LayoutV;
+  using LayoutO = typename FMHAConfiguration::LayoutO;
 
   using StrideQ = typename GemmKernel::StrideQ;
   using StrideK = typename GemmKernel::StrideK;
@@ -128,6 +122,9 @@ template <class GemmKernel> struct ExampleRunner {
   using ElementAccumulator = typename CollectiveEpilogue::ElementAccumulator;
 
   using ProblemShapeType = typename GemmKernel::ProblemShape;
+  static constexpr bool Causal = FMHAConfiguration::Causal;
+
+  int32_t count;
 
   //
   // Data members
@@ -140,9 +137,9 @@ template <class GemmKernel> struct ExampleRunner {
   StrideO stride_O;
   uint64_t seed = 0;
 
-  cutlass::DeviceAllocation<ElementQ> block_Q;
-  cutlass::DeviceAllocation<ElementK> block_K;
-  cutlass::DeviceAllocation<ElementV> block_V;
+  std::vector<cutlass::DeviceAllocation<ElementQ>> block_Q;
+  std::vector<cutlass::DeviceAllocation<ElementK>> block_K;
+  std::vector<cutlass::DeviceAllocation<ElementV>> block_V;
   cutlass::DeviceAllocation<ElementOutput> block_O;
   cutlass::DeviceAllocation<ElementOutput> block_ref_O;
 
@@ -150,7 +147,7 @@ template <class GemmKernel> struct ExampleRunner {
   // Methods
   //
 
-  bool verify(const ProblemShapeType &problem_size, bool is_causal) {
+  bool verify(const ProblemShapeType &problem_size) {
     auto [batch, num_heads, seq_len, head_size] = problem_size;
 
     int batch_size = batch * num_heads;
@@ -162,9 +159,9 @@ template <class GemmKernel> struct ExampleRunner {
       cutlass::DeviceAllocation<ElementOutput> block_S;
       block_S.reset(seq_len * seq_len);
 
-      cutlass::TensorRef ref_Q(block_Q.get() + offset, LayoutQ::packed({seq_len, head_size}));
-      cutlass::TensorRef ref_K(block_K.get() + offset, LayoutK::packed({head_size, seq_len}));
-      cutlass::TensorRef ref_V(block_V.get() + offset, LayoutV::packed({seq_len, head_size}));
+      cutlass::TensorRef ref_Q(block_Q[0].get() + offset, LayoutQ::packed({seq_len, head_size}));
+      cutlass::TensorRef ref_K(block_K[0].get() + offset, LayoutK::packed({head_size, seq_len}));
+      cutlass::TensorRef ref_V(block_V[0].get() + offset, LayoutV::packed({seq_len, head_size}));
       cutlass::TensorRef ref_S(block_S.get(), LayoutQ::packed({seq_len, seq_len}));
       cutlass::TensorRef ref_O(block_ref_O.get() + offset, LayoutO::packed({seq_len, head_size}));
 
@@ -187,7 +184,7 @@ template <class GemmKernel> struct ExampleRunner {
       // delete this memory as it is no longer needed
       block_S.reset();
 
-      if (is_causal) {
+      if (Causal) {
         // apply mask to S
         for (int row = 0; row < seq_len; row++) {
           for (int col = 0; col < seq_len; col++) {
@@ -214,7 +211,7 @@ template <class GemmKernel> struct ExampleRunner {
         int idx = row * seq_len;
         int max_idx = row;
         for (int col = 0; col < seq_len; col++, idx++) {
-          host_S[idx] = expf((host_S[idx] - max_vec[max_idx]) / sqrt(static_cast<ElementOutput>((head_size))));
+          host_S[idx] = expf((host_S[idx] - max_vec[max_idx]) / std::sqrt(static_cast<ElementOutput>((head_size))));
         }
       }
 
@@ -281,16 +278,32 @@ template <class GemmKernel> struct ExampleRunner {
     stride_V = cutlass::make_cute_packed_stride(StrideV{}, cute::make_shape(head_size, seq_len, batch * num_heads));
     stride_O = cutlass::make_cute_packed_stride(StrideO{}, cute::make_shape(seq_len, head_size, batch * num_heads));
 
-    auto count = batch * num_heads * seq_len * head_size;
-    block_Q.reset(count);
-    block_K.reset(count);
-    block_V.reset(count);
-    block_O.reset(count);
-    block_ref_O.reset(count);
+    auto mem_size = batch * num_heads * seq_len * head_size;
 
-    initialize_block(block_Q, seed + 2023);
-    initialize_block(block_K, seed + 2022); // assume K is already transposed
-    initialize_block(block_V, seed + 2021);
+    std::size_t mem_occupied_QKV = (mem_size * sizeof(ElementQ)) + (mem_size * sizeof(ElementK)) + 
+                                   (mem_size * sizeof(ElementV));
+
+    count = std::ceil(static_cast<float>(cutlass::get_llc_size()) / static_cast<float>(mem_occupied_QKV)) + 1;
+
+    for(int i = 0; i < count; i++) {
+      block_Q.emplace_back();
+      block_K.emplace_back();
+      block_V.emplace_back();      
+    }
+
+    
+    for(int i = 0; i < count; i++) {
+      block_Q[i].reset(mem_size);
+      block_K[i].reset(mem_size);
+      block_V[i].reset(mem_size);
+
+      initialize_block(block_Q[i], seed + i);
+      initialize_block(block_K[i], seed + i);
+      initialize_block(block_V[i], seed + i);
+    }
+
+    block_O.reset(mem_size);
+    block_ref_O.reset(mem_size);
   }
 
   static void run(typename GemmKernel::Params params) {
@@ -312,7 +325,7 @@ template <class GemmKernel> struct ExampleRunner {
     EventManager::getInstance().addEvent(event);
   }
 
-  void run(const Options &options, const cutlass::KernelHardwareInfo &hw_info) {
+  void run(::benchmark::State& state, const FMHAOptions &options, const cutlass::KernelHardwareInfo &hw_info) {
     ProblemShapeType problem_size =
         ProblemShapeType{options.batch, options.num_heads, options.seq_len, options.head_size};
 
@@ -321,7 +334,7 @@ template <class GemmKernel> struct ExampleRunner {
     typename GemmKernel::Arguments arguments{
         cutlass::gemm::GemmUniversalMode::kGemm,
         problem_size,
-        {block_Q.get(), stride_Q, block_K.get(), stride_K, block_V.get(), stride_V},
+        {block_Q[0].get(), stride_Q, block_K[0].get(), stride_K, block_V[0].get(), stride_V},
         {options.softmax_scale},
         {block_O.get(), stride_O},
         hw_info};
@@ -347,80 +360,104 @@ template <class GemmKernel> struct ExampleRunner {
     syclcompat::wait();
 
     // Verify that the result is correct
-    bool passed = verify(problem_size, options.is_causal);
-    std::cout << "Disposition: " << (passed ? "Passed" : "Failed") << std::endl;
-
-    if (passed && options.iterations > 0) {
-      GPU_Clock timer;
-      timer.start();
-      for (int i = 0; i < options.iterations; ++i) {
-        run(params);
-      }
-      syclcompat::wait();
-
-      double cute_time = timer.seconds() / options.iterations;
-      double flops_qk = 2.0 * options.batch * options.num_heads * options.seq_len * options.seq_len * options.head_size;
-      double flops_pv = 2.0 * options.batch * options.num_heads * options.seq_len * options.head_size * options.seq_len;
-      double tflops = ((flops_qk + flops_pv) * 1e-12) / cute_time;
-      double gbps_qk = 2.0 * options.batch * options.num_heads * (options.seq_len * options.head_size + options.seq_len * options.head_size);
-      double gbps_pv = 2.0 * options.batch * options.num_heads * (options.seq_len * options.head_size + options.seq_len * options.head_size);
-      double gbps = ((gbps_qk + gbps_pv)  * 1e-9) / (cute_time);
-      std::cout << "Problem Size: " << options.batch << 'x' << options.num_heads << 'x' << options.seq_len << 'x'
-                << options.head_size << (options.is_causal ? "xCausal" : "xNonCausal");
-      printf(":   %4.3f  GB/s   ,    %4.3f  TFlop/s   ,   %6.4f  ms\n", gbps, tflops, cute_time * 1000);
+    bool passed = verify(problem_size);
+    if(not passed) {
+      state.SkipWithError("Disposition Failed.");
     }
 
-    return;
+    state.counters["batch"] = options.batch;
+    state.counters["num_heads"] = options.num_heads;
+    state.counters["seq_len"] = options.seq_len;
+    state.counters["head_size"] = options.head_size;
+    state.counters["scale"] = options.softmax_scale;
+    state.counters["causal"] = Causal;
+
+    std::stringstream extra_label;
+    extra_label << "layoutQ=RowMajor ";
+    extra_label << "layoutK=ColumnMajor ";
+    extra_label << "layoutV=RowMajor ";
+
+    state.SetLabel(extra_label.str());
+
+    double flops_qk = 2.0 * options.batch * options.num_heads * options.seq_len * options.seq_len * options.head_size;
+    double flops_pv = 2.0 * options.batch * options.num_heads * options.seq_len * options.head_size * options.seq_len;
+    double gflops = (flops_qk + flops_pv) * 1e-9;
+
+    double mega_bytes_transferred = options.batch * options.num_heads *
+                  (options.seq_len * options.head_size + options.seq_len * options.head_size) * 2 * 2 * (1e-6);
+
+    initialize_counters(state);
+    int32_t counter = 1;
+    for(auto _ : state) {
+      state.PauseTiming();
+      int input_num = std::max(int(0), counter % count);
+
+      typename GemmKernel::Arguments arguments{
+          cutlass::gemm::GemmUniversalMode::kGemm,
+          problem_size,
+          {block_Q[input_num].get(), stride_Q, block_K[input_num].get(), stride_K, block_V[input_num].get(), stride_V},
+          {options.softmax_scale},
+          {block_O.get(), stride_O},
+          hw_info};
+
+      size_t workspace_size = GemmKernel::get_workspace_size(arguments);
+      cutlass::device_memory::allocation<uint8_t> workspace(workspace_size);
+
+      GemmKernel::can_implement(arguments);
+
+      // Initialize the workspace
+      auto status = GemmKernel::initialize_workspace(arguments, workspace.get());
+      if (status != cutlass::Status::kSuccess) {
+        return;
+      }
+
+      typename GemmKernel::Params params = GemmKernel::to_underlying_arguments(arguments, workspace.get());
+
+      state.ResumeTiming();
+
+      GPU_Clock timer;
+      timer.start();
+      run(params);
+      auto ms_elapsed = timer.milliseconds();
+      update_counters(state, ms_elapsed);
+      state.SetIterationTime(ms_elapsed / 1000);
+      counter++;
+    }
+    finalize_counters(state, gflops, mega_bytes_transferred);
+  }
+
+private:
+  static void initialize_counters(::benchmark::State& state) {
+    state.counters["avg_runtime_ms"] = 0;
+    state.counters["best_runtime_ms"] = std::numeric_limits<double>::max();
+  }
+
+  static void update_counters(::benchmark::State& state, double ms_elapsed) {
+    state.PauseTiming();
+    state.counters["total_runtime_ms"] += ms_elapsed;
+    state.counters["best_runtime_ms"] = std::min<double>(state.counters["best_runtime_ms"], ms_elapsed);
+    state.ResumeTiming();
+  }
+
+  static void finalize_counters(::benchmark::State& state,  double gflop, double mega_bytes_transferred) {
+    state.counters["avg_runtime_ms"] =
+      state.counters["total_runtime_ms"] / static_cast<double>(state.iterations());
+    state.counters["avg_tflops"] = gflop / state.counters["avg_runtime_ms"];
+    state.counters["avg_throughput"] = mega_bytes_transferred / state.counters["avg_runtime_ms"];
+    state.counters["best_tflop"] = gflop / state.counters["best_runtime_ms"];
+    state.counters["best_bandwidth"] = mega_bytes_transferred / state.counters["best_runtime_ms"];
   }
 };
 
-template <bool Causal, typename TileShape, typename TiledMma> struct FMHAConfig {
-  static int run(const Options &options) {
+}
 
-    //
-    // Run examples
-    //
+#define CUTLASS_FMHA_BENCHMARK(F) cutlass::benchmark::BenchmarkRegistry<cutlass::benchmark::FMHAOptions>::Register(#F, &F##_func)
 
-    // The KernelHardwareInfo struct holds the number of EUs on the GPU with a given device ID. This
-    // information is used by the underlying kernel.
-    cutlass::KernelHardwareInfo hw_info;
-
-    // The code section below describes datatype for input, output matrices and computation between
-    // elements in input matrices.
-    using ElementAccumulator = float;     // <- data type of accumulator
-    using ElementComputeEpilogue = float; // <- data type of epilogue operations
-    using ElementInputQ = bfloat16_t;     // <- data type of elements in input matrix A
-    using ElementInputKV = bfloat16_t;    // <- data type of elements in input matrix B
-    using ElementOutput = float;          // <- data type of elements in output matrix D
-        
-    constexpr int PipelineStages = 2;
-    using GEMMDispatchPolicy = cutlass::gemm::MainloopIntelPVC<PipelineStages>;
-    using EpilogueDispatchPolicy = cutlass::epilogue::IntelPVCEpilogue;
-
-    using GmemTiledCopyQ = XE_2D_U16x16x32_LD_N;
-    using GmemTiledCopyK = XE_2D_U16x16x16_LD_T;
-    using GmemTiledCopyV = XE_2D_U16x32x32_LD_V;
-    using GmemTiledCopyStore = XE_2D_U32x8x16_ST_N;
-    using CollectiveEpilogue = cutlass::epilogue::collective::CollectiveEpilogueAttention<
-        EpilogueDispatchPolicy, TileShape, ElementAccumulator, cutlass::gemm::TagToStrideC_t<LayoutO>, ElementOutput,
-        GmemTiledCopyStore>;
-    using CollectiveSoftmaxEpilogue = cutlass::epilogue::collective::CollectiveSoftmaxEpilogue<Causal, EpilogueDispatchPolicy, ElementAccumulator>;
-
-    // Mainloop
-    using CollectiveMainloop = cutlass::gemm::collective::CollectiveMmaAttention<
-        GEMMDispatchPolicy, TileShape, ElementInputQ, cutlass::gemm::TagToStrideA_t<LayoutQ>, ElementInputKV,
-        cutlass::gemm::TagToStrideB_t<LayoutK>, ElementInputKV, cutlass::gemm::TagToStrideB_t<LayoutV>, TiledMma,
-        GmemTiledCopyQ, // Q
-        GmemTiledCopyK, // K
-        GmemTiledCopyV, // V,
-        Causal>;
-
-    using GemmKernel = cutlass::gemm::kernel::GemmUniversalAttention<Shape<int, int, int, int>, CollectiveMainloop,
-                                                                     CollectiveSoftmaxEpilogue, CollectiveEpilogue>;
-
-    ExampleRunner<GemmKernel> runner;
-
-    runner.run(options, hw_info);
-    return 0;
+#define CUTLASS_CREATE_FMHA_BENCHMARK(F)                          \
+  static void F##_func(                                           \
+      ::benchmark::State& state,                                  \
+      cutlass::benchmark::FMHAOptions const& options,                 \
+      cutlass::KernelHardwareInfo const& hw_info) {               \
+    auto bench = cutlass::benchmark::BenchmarkRunnerFMHA<F>();    \
+    bench.run(state, options, hw_info);                           \
   }
-};
