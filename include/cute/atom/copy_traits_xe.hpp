@@ -84,6 +84,77 @@ static constexpr bool is_stride_leftmost<T, cute::void_t<decltype(T{}.stride())>
 
 } // end namespace detail
 
+template<class TileShape, int Num_SGs, int SubgroupSize = detail::subgroup_size, class Tensor>
+CUTE_HOST_DEVICE auto prefetch_selector(Tensor const& tensor) {
+  constexpr size_t cacheline_bytes = 64;
+  using dtype = typename Tensor::value_type;
+  constexpr size_t dtype_size_bits = sizeof_bits_v<dtype>;
+  using CopyThreadShape = Shape<_1, Int<SubgroupSize >>;
+  constexpr bool is_need_reversed = detail::is_stride_leftmost<decltype(tensor.stride())>;
+
+  constexpr int tile_contig_size = is_need_reversed ? size<0>(TileShape{}) : size<1>(TileShape{});
+  constexpr int tile_non_contig_size = is_need_reversed ? size<1>(TileShape{}) : size<0>(TileShape{});
+
+  // block here is what is prefetched in one atom execution
+  // min(32,32)-> 32 (256, 32) -> 32
+  static constexpr auto block_contig_size = cute::min(tile_contig_size, cacheline_bytes / sizeof(dtype));
+  // A: 1 -> trans or B 256/32 = 8
+  static constexpr auto nums_blocks_contig = ceil_div(tile_contig_size, block_contig_size);
+  
+  // layout of sub groups
+  // A shape<32,1> / trans or B shape<4,8>
+  constexpr int sgs_contig = cute::gcd(Num_SGs, nums_blocks_contig);
+  constexpr int sgs_non_contig = Num_SGs / sgs_contig;
+
+  constexpr auto block_non_contig_size = tile_non_contig_size / sgs_non_contig;
+
+  using PrefetchTilingLayout = std::conditional_t<is_need_reversed,
+    Layout<Shape<Shape<Int<SubgroupSize >, Int<sgs_contig>>, Int<sgs_non_contig>>,
+           Stride<Stride<_1, Int<SubgroupSize >>,            Int<SubgroupSize  * sgs_contig>>>,
+    Layout<Shape<Int<sgs_non_contig>, Shape<Int<SubgroupSize >, Int<sgs_contig>>>,
+           Stride<Int<SubgroupSize >,  Stride<_1, Int<SubgroupSize  * sgs_non_contig>>>>
+  >;
+
+  #define RETURN_STATEMENT(NON_CONTIG, DTYPE_SIZE, CONTIG) \
+    using PrefetchTraits = Copy_Traits<XE_2D_U##DTYPE_SIZE##x##NON_CONTIG##x##CONTIG##_LD_N, decltype(tensor.stride())>; \
+    using PrefetchAtom = Copy_Atom<PrefetchTraits, dtype>; \
+    using PrefetchValLayoutBase = decltype(make_layout(shape_div(typename PrefetchTraits::BlockShape{}, CopyThreadShape{}))); \
+    using PrefetchValLayout = std::conditional_t<is_need_reversed, \
+                                                 decltype(make_layout(make_shape(size<1>(PrefetchValLayoutBase{}), size<0>(PrefetchValLayoutBase{})), LayoutRight{})), \
+                                                 PrefetchValLayoutBase>; \
+    return make_tiled_copy(PrefetchAtom{}.with(tensor), \
+                           PrefetchTilingLayout{}, \
+                           PrefetchValLayout{});
+
+  #define CHOOSE_PREFETCH_FOR_TYPE(NON_CONTIG) \
+    if constexpr (dtype_size_bits == 8){ \
+      RETURN_STATEMENT(NON_CONTIG, 8, 64); \
+    } else if constexpr (dtype_size_bits == 16){ \
+      RETURN_STATEMENT(NON_CONTIG, 16, 32); \
+    } else if constexpr (dtype_size_bits == 32){ \
+      RETURN_STATEMENT(NON_CONTIG, 32, 16); \
+    } else { \
+      static_assert(dependent_false<dtype> && "Invalid TileShape and dtype"); \
+    }
+
+  if constexpr (block_non_contig_size == 1){
+    CHOOSE_PREFETCH_FOR_TYPE(1)
+  } else if constexpr (block_non_contig_size == 2) {
+    CHOOSE_PREFETCH_FOR_TYPE(2)
+  } else if constexpr (block_non_contig_size == 4) {
+    CHOOSE_PREFETCH_FOR_TYPE(4)
+  } else if constexpr (block_non_contig_size == 8) {
+    CHOOSE_PREFETCH_FOR_TYPE(8)
+  } else if constexpr (block_non_contig_size == 16) {
+    CHOOSE_PREFETCH_FOR_TYPE(16)
+  } else if constexpr (block_non_contig_size == 32) {
+    CHOOSE_PREFETCH_FOR_TYPE(32)
+  } else {
+    static_assert(dependent_false<TileShape> && "Invalid TileShape[0]");
+  }
+  #undef CHOOSE_PREFETCH_FOR_TYPE
+  #undef RETURN_STATEMENT
+}
 
 template <uint32_t dim, class Tensor_t>
 static constexpr auto append_pvc_tensor(Tensor_t const &t0, uint32_t shape, uint32_t stride) {
@@ -161,6 +232,11 @@ struct XE_2D_LD_Unpack {
 
   XE_2D_LD_Unpack() {}
 
+  template<class TileShape, int Num_SGs, class Tensor>
+  CUTE_HOST_DEVICE auto prefetch_selector(Tensor const& tensor) const {
+    constexpr int subgroup_size  = size(typename Traits_LD_t::ThrID{});
+    return cute::prefetch_selector<TileShape, Num_SGs, subgroup_size>(tensor);
+  }
 
   template <class TS, class SLayout, class TD, class DLayout>
   CUTE_HOST_DEVICE friend constexpr void
@@ -170,7 +246,7 @@ struct XE_2D_LD_Unpack {
     constexpr int dtype_bits = sizeof_bits_v<dtype>;
 
     static_assert(is_rmem<TD>::value);
-    // TODO(Codeplay): rnable this check once the coordinate refactoring is complete
+    // TODO(Codeplay): enable this check once the coordinate refactoring is complete
     //static_assert(size(SLayout{}) * dtype_bits == size<1>(typename Traits_LD_t::SrcLayout{}),
       //            "Src tensor size does not match copy atom size");
     // static_assert(size(DLayout{}) * dtype_bits == size<1>(typename Traits_LD_t::DstLayout{}),
@@ -195,6 +271,7 @@ struct XE_2D_LD_Unpack {
   prefetch(Copy_Atom<Traits_LD_t, CA_Args...> const &atom,
            Tensor<TS, SLayout> const &src) {
     static_assert(detail::has_prefetch<CopyOp>);
+    //TODO(Codeplay) add asserts on size
 
     using dtype = typename Copy_Atom<Traits_LD_t, CA_Args...>::ValType;
 
@@ -202,10 +279,13 @@ struct XE_2D_LD_Unpack {
 
     auto [m, n, l] = src.data().coord_;
 
+    int x = is_need_reversed ? m : n;
+    int y = is_need_reversed ? n : m;
+
     CopyOp::PREFETCH::copy((void *)(base_addr + l * atom.stride_l),
                            atom.width * sizeof(dtype), atom.height,
                            atom.pitch * sizeof(dtype),
-                           intel::coord_t{(int)n, (int)m});
+                           intel::coord_t{x, y});
   }
 
   template <class Coord, class GShape>
@@ -255,16 +335,22 @@ struct XE_2D_LD_Unpack {
 
   template <class TLShape>
   CUTE_HOST_DEVICE constexpr auto make_fragment_layout(TLShape&& fragment_top_level_shape) const {
-    auto [mma_atom_size, total_mma_atom_iters_M, total_mma_atom_iters_N] = fragment_top_level_shape;
-    auto copy_size_M = size<0>(BlockShape{}); //TODO(Codeplay): We could use ValLayoutDst once it is consistent
-    auto copy_size_N = size<1>(BlockShape{}) / size(typename Traits_LD_t::ThrID{});
-    assert(copy_size_M >= mma_atom_size);
-    auto mma_atom_iters_in_copy_M = copy_size_M / mma_atom_size;
-    auto mma_atom_iters_in_copy_N = copy_size_N;
-    auto copy_iters_M = total_mma_atom_iters_M / mma_atom_iters_in_copy_M;
-    auto copy_iters_N = total_mma_atom_iters_N / mma_atom_iters_in_copy_N;
-    auto order = std::conditional_t<is_convention_MN, Step<_0, Step<_1,_3>, Step<_2,_4>>, Step<_0, Step<_2,_4>, Step<_1,_3>>>{};
-    return make_ordered_layout(make_shape(mma_atom_size, 
+    auto [mma_atom_shape, total_mma_atom_iters_M, total_mma_atom_iters_N] = fragment_top_level_shape;
+    auto mma_atom_shape_2d = prepend<2>(mma_atom_shape, _1{});
+    Int mma_atom_size_M = Int<!is_convention_MN ? size<0>(mma_atom_shape_2d) : size<1>(mma_atom_shape_2d)>{};
+    Int mma_atom_size_N = Int<!is_convention_MN ? size<1>(mma_atom_shape_2d) : size<0>(mma_atom_shape_2d)>{};
+    Int copy_size_M = Int<!is_convention_MN ? size<1>(BlockShape{}) / size(typename Traits_LD_t::ThrID{}) : size<0>(BlockShape{})>{}; //TODO(Codeplay): We could use ValLayoutDst once it is consistent
+    Int copy_size_N = Int<!is_convention_MN ? size<0>(BlockShape{}) : size<1>(BlockShape{}) / size(typename Traits_LD_t::ThrID{})>{};
+    static_assert(copy_size_M >= mma_atom_size_M);
+    static_assert(copy_size_N >= mma_atom_size_N);
+    Int mma_atom_iters_in_copy_M = copy_size_M / mma_atom_size_M;
+    Int mma_atom_iters_in_copy_N = copy_size_N / mma_atom_size_N;
+    Int copy_iters_M = total_mma_atom_iters_M / mma_atom_iters_in_copy_M;
+    Int copy_iters_N = total_mma_atom_iters_N / mma_atom_iters_in_copy_N;
+    auto order = std::conditional_t<is_convention_MN, Step<Step<_0,_1>, Step<_2,_4>, Step<_3,_5>>, 
+                                                      Step<Step<_0,_1>, Step<_3,_5>, Step<_2,_4>>>{};
+
+    return make_ordered_layout(make_shape(mma_atom_shape_2d, 
                                           make_shape(mma_atom_iters_in_copy_M, copy_iters_M), 
                                           make_shape(mma_atom_iters_in_copy_N, copy_iters_N)), order);
   };
@@ -2120,7 +2206,7 @@ namespace detail
       static_assert(dependent_false<PrefetchTileSize> && "Invalid PrefetchTileSize[0]");
     }
   }
- 
+
 template<typename PrefetchShape, class Stride, class dtype, int subgroupsize, class Tensor >
   CUTE_HOST_DEVICE  auto make_prefetch(Tensor const& tensor) {
       using prefetch_trait = Copy_Traits<PrefetchShape, Stride>;
@@ -2340,6 +2426,14 @@ copy(Xe2DTiledCopy<CopyAtom, TV, Tiler> const& tiled_copy,
      Tensor<DstEngine, DstLayout>        & dst)
 {
   return copy(static_cast<CopyAtom const&>(tiled_copy), src, dst);
+}
+
+// Generate the PVC coordinate tensor
+template <class GShape>
+CUTE_HOST_DEVICE constexpr
+auto
+get_pvc_tensor(GShape const& g_shape) {
+  return make_counting_tensor(make_identity_layout(g_shape));
 }
 
 } // end namespace cute

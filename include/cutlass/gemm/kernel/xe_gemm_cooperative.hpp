@@ -92,14 +92,15 @@ public:
   using EpilogueArguments = typename CollectiveEpilogue::Arguments;
   using EpilogueParams = typename CollectiveEpilogue::Params;
 
+  static constexpr uint32_t MaxThreadsPerBlock = CollectiveMainloop::MaxThreadsPerBlock;
+
   using TileSchedulerTag = TileScheduler_;
   using TileScheduler = typename detail::TileSchedulerSelector<
-    TileScheduler_, ArchTag, TileShape, ClusterShape>::Scheduler;
+    TileScheduler_, ArchTag, TileShape, ClusterShape, MaxThreadsPerBlock>::Scheduler;
   using TileSchedulerArguments = typename TileScheduler::Arguments;
   using TileSchedulerParams = typename TileScheduler::Params;
 
   static constexpr int SubgroupSize = CollectiveMainloop::SubgroupSize; // sub_group size
-  static constexpr uint32_t MaxThreadsPerBlock = CollectiveMainloop::MaxThreadsPerBlock;
   using MmaAtomShape = typename CollectiveMainloop::MmaAtomShape;
   using SubgroupTileShape = typename CollectiveMainloop::SubgroupTileShape;
 
@@ -250,8 +251,8 @@ public:
       const int l_coord = work_tile_info.L_idx;
       const auto tile_coord = make_coord(m_coord, n_coord, _, l_coord);
       
-      Tensor mA_mkl = params.mainloop.copy_A.get_pvc_tensor(make_shape(M,K,L));   //(m,k,l)
-      Tensor mB_nkl = params.mainloop.copy_B.get_pvc_tensor(make_shape(N,K,L));   //(n,k,l)
+      Tensor mA_mkl = cute::get_pvc_tensor(make_shape(M,K,L));   //(m,k,l)
+      Tensor mB_nkl = cute::get_pvc_tensor(make_shape(N,K,L));   //(n,k,l)
 
       Tensor mA_mk = mA_mkl(_,_,l_coord);                                                                        // (m,k)
       Tensor mB_nk = mB_nkl(_,_,l_coord);                                                                        // (n,k)
@@ -292,11 +293,8 @@ public:
       );
 
       // Perform reduction across splits, if needed
-      if constexpr (cute::is_same_v<TileScheduler, detail::PersistentTileSchedulerXeStreamK<TileShape>>)
-      {
-        TileScheduler::template fixup<MaxThreadsPerBlock>(
-          params.scheduler, work_tile_info, accumulators);  
-      }
+      TileScheduler::fixup(
+        params.scheduler, work_tile_info, accumulators, 1, 0);
 
       if (TileScheduler::compute_epilogue(work_tile_info, params.scheduler)) {
         CollectiveEpilogue epilogue{params.epilogue, shared_storage.epilogue};
