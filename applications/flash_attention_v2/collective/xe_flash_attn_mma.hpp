@@ -182,14 +182,14 @@ struct CollectiveMmaAttention<MainloopIntelPVC<Stages>, TileShape_, ElementQ_, S
                                                   void *workspace) {
     (void)workspace;
 
-    auto [batch, num_heads, seq_len, head_size] = problem_shape;
+    auto [batch, num_heads, seq_len_qo, seq_len_kv, head_size_qk, head_size_vo] = problem_shape;
 
     auto tensorQ = make_tensor(make_gmem_ptr(static_cast<ElementQ const *>(args.ptr_Q)),
-                               make_layout(make_shape(seq_len, head_size, batch * num_heads), args.dQ));
+                               make_layout(make_shape(seq_len_qo, head_size_qk, batch * num_heads), args.dQ));
     auto tensorK = make_tensor(make_gmem_ptr(static_cast<ElementK const *>(args.ptr_K)),
-                               make_layout(make_shape(seq_len, head_size, batch * num_heads), args.dK));
+                               make_layout(make_shape(seq_len_kv, head_size_qk, batch * num_heads), args.dK));
     auto tensorV = make_tensor(make_gmem_ptr(static_cast<ElementV const *>(args.ptr_V)),
-                               make_layout(make_shape(head_size, seq_len, batch * num_heads), args.dV));
+                               make_layout(make_shape(head_size_vo, seq_len_qo, batch * num_heads), args.dV));
 
     XE_Copy_Q copyQ = make_tiled_copy(atom_load_Q{}.with(tensorQ),
                                       Layout<CopyThreadShape>{},

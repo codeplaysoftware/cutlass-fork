@@ -53,7 +53,7 @@ public:
   //
   using ProblemShape = ProblemShape_;
 
-  static_assert(rank(ProblemShape{}) == 4, "ProblemShape{} should be <batch, num_heads, seq_len, head_size>");
+  static_assert(rank(ProblemShape{}) == 6, "ProblemShape{} should be <batch, num_heads, seq_len_qo, seq_len_kv, head_size_qk, head_size_vo>");
 
   // Mainloop derived types
   using CollectiveMainloop = CollectiveMainloop_;
@@ -176,7 +176,7 @@ public:
   }
 
   static dim3 get_grid_shape(Params const &params) {
-    return dim3(cute::size(cute::ceil_div(cute::shape<3>(params.problem_shape), cute::shape<1>(WorkgroupTileShape{}))),
+    return dim3(cute::size(cute::ceil_div(cute::shape<5>(params.problem_shape), cute::shape<1>(WorkgroupTileShape{}))),
                 cute::size(cute::ceil_div(cute::shape<2>(params.problem_shape), cute::shape<0>(WorkgroupTileShape{}))),
                 cute::size(cute::shape<0>(params.problem_shape) * cute::shape<1>(params.problem_shape)));
   }
@@ -191,12 +191,14 @@ public:
     // Separate out problem shape for convenience
     auto batch = get<0>(params.problem_shape);
     auto num_heads = get<1>(params.problem_shape);
-    auto seq_len = get<2>(params.problem_shape);
-    auto head_size = get<3>(params.problem_shape);
+    auto seq_len_qo = get<2>(params.problem_shape);
+    auto seq_len_kv = get<3>(params.problem_shape);
+    auto head_size_qk = get<4>(params.problem_shape);
+    auto head_size_vo = get<5>(params.problem_shape);
     // Preconditions
-    static_assert(cute::rank(StrideQ{}) == 3, "StrideQ must be rank-3: [seq_len, head_size, batch * num_heads].");
-    static_assert(cute::rank(StrideK{}) == 3, "StrideK must be rank-3: [head_size, seq_len, batch * num_heads].");
-    static_assert(cute::rank(StrideV{}) == 3, "StrideV must be rank-3: [seq_len, head_size, batch * num_heads].");
+    static_assert(cute::rank(StrideQ{}) == 3, "StrideQ must be rank-3: [seq_len_qo, head_size_qk, batch * num_heads].");
+    static_assert(cute::rank(StrideK{}) == 3, "StrideK must be rank-3: [head_size_qk, seq_len_kv, batch * num_heads].");
+    static_assert(cute::rank(StrideV{}) == 3, "StrideV must be rank-3: [seq_len_kv, head_size_vo, batch * num_heads].");
 
     int thread_idx = int(ThreadIdxX());
     int sub_group_id = thread_idx / SubgroupSize;
@@ -206,9 +208,9 @@ public:
     auto blk_n_coord = BlockIdxX();
     auto blk_l_coord = BlockIdxZ();
 
-    Tensor mQ_mkl = params.mainloop.gmem_tiled_copy_q.get_pvc_tensor(make_shape(seq_len, head_size, batch * num_heads));   //(m,k,l)
-    Tensor mK_nkl = params.mainloop.gmem_tiled_copy_k.get_pvc_tensor(make_shape(seq_len, head_size, batch * num_heads));   //(m,k,l)
-    Tensor mV_nkl = params.mainloop.gmem_tiled_copy_v.get_pvc_tensor(make_shape(head_size, seq_len, batch * num_heads));   //(n,k,l)
+    Tensor mQ_mkl = params.mainloop.gmem_tiled_copy_q.get_pvc_tensor(make_shape(seq_len_qo, head_size_qk, batch * num_heads));   //(m,k,l)
+    Tensor mK_nkl = params.mainloop.gmem_tiled_copy_k.get_pvc_tensor(make_shape(seq_len_kv, head_size_qk, batch * num_heads));   //(m,k,l)
+    Tensor mV_nkl = params.mainloop.gmem_tiled_copy_v.get_pvc_tensor(make_shape(head_size_vo, seq_len_kv, batch * num_heads));   //(n,k,l)
     Tensor mQ_mk = mQ_mkl(_,_,blk_l_coord);                                                      // (m,k)
     Tensor mK_nk = mK_nkl(_,_,blk_l_coord);                                                      // (n,k)
     Tensor mV_nk = mV_nkl(_,_,blk_l_coord);                                                      // (n,k)
@@ -225,12 +227,12 @@ public:
     using PrefetchVTileSize = typename CollectiveMainloop::PrefetchVTileSize; // 16x32   // 16x32
 
     const int causal_seq_len = seq_coord + get<0>(subgroup_shape);
-    const int non_causal_seq_len = seq_len;
+    const int non_causal_seq_len = seq_len_kv;
 
     const int nblock_limit = CausalMask ? cute::ceil_div(causal_seq_len, SG_N)
                                         : cute::ceil_div(non_causal_seq_len, SG_N);
 
-    const int k_tile_count = head_size / (get<1>(PrefetchQThrShape{}) * get<1>(PrefetchQTileSize{}));
+    const int k_tile_count = head_size_qk / (get<1>(PrefetchQThrShape{}) * get<1>(PrefetchQTileSize{}));
     // m, k
     Tensor prefetch_iter_2d_q = params.mainloop.gmem_prefetch_q.get_pvc_tensor(
         // subgroup arranged 4x2 to load 128x64 in 2 load load (each 32X32)
@@ -243,9 +245,9 @@ public:
     Tensor prefetch_iter_q = append_pvc_tensor<1>(prefetch_iter_2d_q, k_tile_count,
                                                   (get<1>(PrefetchQThrShape{}) * get<1>(PrefetchQTileSize{})));
     // The Key point is 1 is horisontal and zero is vertical
-    // the iteration over K dimention of B matrix (head_size) should be :
+    // the iteration over K dimention of B matrix (head_size_qk) should be :
     const auto iter_over_head_count =
-        head_size / (get<1>(PrefetchKThrShape{}) * get<1>(PrefetchKTileSize{})); // head_size / BLK_N;
+        head_size_qk / (get<1>(PrefetchKThrShape{}) * get<1>(PrefetchKTileSize{})); // head_size_qk / BLK_N;
     // subgroup arranged 4x2 to load (64x64) in one load(each 16x32)
     // Assume LD_T/LD_N will indicate ColumnMajor and RowMajor
     auto k_prefetch_coordinate = make_coord(
@@ -311,10 +313,10 @@ public:
     // of the barrier to workgroup level as the number n block is
     // different for each subgroup due to triangular nature of causal based operation
     static constexpr int barrier_scope = CausalMask ? 3 : 2;
-    // FIX ME(Codeplay): The ceil_div perfrom //(head_size + SG_N-1)  / SG_N) so in both cases 
+    // FIX ME(Codeplay): The ceil_div perfrom //(head_size_qk + SG_N-1)  / SG_N) so in both cases 
     // the performance must be intact having different results seems to be a problem in the code gen
     // Temporarily working around the issue by disabling the ceil_div when head_dim == BLK_N
-    const int tile_qk_count = (CausalMask && head_size % SG_N == 0  ) ? (head_size / SG_N) : cute::ceil_div(head_size, SG_N); 
+    const int tile_qk_count = (CausalMask && head_size_qk % SG_N == 0  ) ? (head_size_qk / SG_N) : cute::ceil_div(head_size_qk, SG_N); 
     // MAIN LOOP: loop over K and V, perform fused attention + online softmax
     for (int nblock = 0, load_idx = 0; nblock < nblock_limit - static_cast<int>(CausalMask); nblock++, 
          load_idx += SG_N) {
