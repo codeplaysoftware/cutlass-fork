@@ -381,7 +381,7 @@ template <class GemmKernel> struct ExampleRunner {
   }
 };
 
-template <bool Causal, typename TileShape, typename TiledMmaQK, typename TiledMmaPV> struct FMHAConfig {
+template <bool Causal, typename TileShape, typename TiledMma> struct FMHAConfig {
   static int run(const Options &options) {
 
     //
@@ -417,7 +417,7 @@ template <bool Causal, typename TileShape, typename TiledMmaQK, typename TiledMm
     using CollectiveMainloop = cutlass::gemm::collective::CollectiveMmaAttention<
         GEMMDispatchPolicy, TileShape, ElementInputQ, cutlass::gemm::TagToStrideA_t<LayoutQ>, ElementInputKV,
         cutlass::gemm::TagToStrideB_t<LayoutK>, ElementInputKV, cutlass::gemm::TagToStrideB_t<LayoutV>,
-        TiledMmaQK, TiledMmaPV,
+        TiledMma,
         GmemTiledCopyQ, // Q
         GmemTiledCopyK, // K
         GmemTiledCopyV, // V,
