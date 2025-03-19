@@ -216,6 +216,18 @@ int round_up(int a, int b) {
   return ((a + b - 1) / b) * b;
 }
 
+
+/// Returns the smallest power of 2 that is >=a
+CUTLASS_HOST_DEVICE
+CUTLASS_CONSTEXPR_IF_CXX17
+int nearest_up_pow2(int a) {
+  int pow = 2;
+  a--; 
+ while (a >>= 1) pow <<= 1;
+ return pow;
+}
+
+
 /// Returns the ceiling of (a / b)
 CUTLASS_HOST_DEVICE
 CUTLASS_CONSTEXPR_IF_CXX17
