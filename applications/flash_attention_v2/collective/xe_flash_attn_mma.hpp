@@ -123,6 +123,7 @@ struct CollectiveMmaAttention<MainloopIntelPVC<Stages>, TileShape_, ElementQ_, S
   using K_Tile_Shape = decltype(Shape<_8, Int<PV_ATOM_M>, _2>{});
 
   // This TiledMma is only required to serve the specific tiling requirements for matrix K.
+  // TODO (Tanvir): Replace this instantiation with ContigBlockMMAHelper once available
   using TiledMmaK = TiledMMA<typename TiledMmaQVO::Atom, Layout<K_Atom_Shape, Stride<_1, _1, _1>>,
                             // Atom, Hardware(NUMBER OF CONCURRENT MMA), Iteration
                             Tile<Layout<K_Tile_Shape, Stride<_1, _16, _8>>,   // Vec Iteration, Hardware Jump,

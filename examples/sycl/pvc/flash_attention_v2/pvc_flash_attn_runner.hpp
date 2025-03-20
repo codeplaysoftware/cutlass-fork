@@ -374,7 +374,7 @@ template <class GemmKernel> struct ExampleRunner {
       std::cout << "Batch: " << options.batch << "\tNumHeads: " << options.num_heads << "\tSeq Length QO: " << options.seq_len_qo
                 << "\tSeq Length KV: " << options.seq_len_kv << "\tHead Size QK: " << options.head_size_qk << "\tHead Size VO: " << options.head_size_vo
                 << "\tCausal Mask: " << (options.is_causal ? "true" : "false");
-      printf("\nPerformance:   %4.3f  GB/s   ,    %4.3f  TFlop/s   ,   %6.4f  ms\n\n", gbps, tflops, cute_time * 1000);
+      printf("\nPerformance:   %4.3f  GB/s,    %4.3f  TFlop/s,   %6.4f  ms\n\n", gbps, tflops, cute_time * 1000);
     }
 
     return;
