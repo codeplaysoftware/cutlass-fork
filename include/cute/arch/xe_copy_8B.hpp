@@ -44,16 +44,6 @@
   }
 #endif
 
-#ifdef __SYCL_DEVICE_ONLY__
-#define SYCL_DEVICE_OCL(x) SYCL_EXTERNAL x
-#else
-#define SYCL_DEVICE_OCL(x)                                                     \
-  inline x {                                                                   \
-    CUTE_INVALID_CONTROL_PATH(                                                 \
-        "Attempting to use a device built-in in host code.");                  \
-  }
-#endif
-
 // 64bits No transform Transpose
 SYCL_DEVICE_BUILTIN(
     cute::intel::ulong __builtin_IB_subgroup_block_read_flat_transpose_u64_k1(
@@ -68,21 +58,6 @@ SYCL_DEVICE_BUILTIN(
         long baseoffset, int width_minus_one, int height_minus_one,
         int pitch_minus_one, cute::intel::coord_t coord));
 #undef SYCL_DEVICE_BUILTIN
-
-#undef __global
-#define __global __attribute__((opencl_global))
-
-// 64bits No transform Transpose
-SYCL_DEVICE_OCL(ulong intel_sub_group_block_read_transpose_64b_8r1c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::ulong2 intel_sub_group_block_read_transpose_64b_8r2c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-SYCL_DEVICE_OCL(cute::intel::ulong4 intel_sub_group_block_read_transpose_64b_8r4c(
-    const __global void *base_address, int width, int height, int pitch,
-    cute::intel::coord_t coord));
-#undef SYCL_DEVICE_OCL
 
 namespace cute
 {
