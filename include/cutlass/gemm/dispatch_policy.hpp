@@ -132,6 +132,7 @@ struct KernelTmaWarpSpecializedCooperativeMixedInput: KernelTmaWarpSpecializedCo
 
 struct KernelPVC { };
 struct KernelPVCCooperative { };
+struct KernelPVCPtrArrayCooperative { };
 //////////////////////////////////////////////////////////////////////////////
 
 //
@@ -703,6 +704,15 @@ struct MainloopIntelPVC {
   constexpr static int SubgroupSize = 16;
   using ArchTag = arch::IntelPVC;
   using Schedule = KernelSchedule;
+  using ClusterShape = Shape<_1,_1,_1>;
+};
+
+template<int Stages_, class KernelScheduler = KernelPVCPtrArrayCooperative>
+struct MainloopIntelPVCGroup {
+  constexpr static int Stages = Stages_;
+  constexpr static int SubgroupSize = 16;
+  using ArchTag = arch::IntelPVC;
+  using Schedule = KernelScheduler;
   using ClusterShape = Shape<_1,_1,_1>;
 };
 

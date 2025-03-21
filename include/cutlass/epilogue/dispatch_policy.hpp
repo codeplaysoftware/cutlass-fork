@@ -235,6 +235,10 @@ struct Sm100PtrArrayNoSmemWarpSpecialized {};
 struct IntelPVCEpilogue {
   static constexpr int SubgroupSize = 16;
 };
+
+struct IntelPVCGroupEpilogue {
+  static constexpr int SubgroupSize = 16;
+};
 #endif
 
 //////////////////////////////////////////////////////////////////////////////
