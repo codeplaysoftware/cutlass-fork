@@ -174,6 +174,7 @@ else()
   foreach(EXAMPLE
     14_ampere_tf32_tensorop_gemm
     35_gemm_softmax
+    61_hopper_gemm_with_topk_and_softmax
     cute
     sycl
     )

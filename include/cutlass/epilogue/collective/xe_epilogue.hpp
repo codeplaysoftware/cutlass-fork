@@ -380,6 +380,8 @@ public:
     for (int epi_n = 0; epi_n < FragsN; epi_n++) {
       CUTLASS_PRAGMA_UNROLL
       for (int epi_m = 0; epi_m < FragsM; epi_m++) {
+        bool is_last_iteration = epi_m == FragsM-1 && epi_n == FragsN-1;
+        cst_callbacks.begin_loop(epi_m, epi_n);
 
         if (is_C_load_needed) {
           //cordinates for C and D are the same
@@ -399,6 +401,8 @@ public:
         if constexpr (is_destination_supported) {
           copy(params.xe_store_d, trD, tCgD(_, epi_m, epi_n));
         }
+        
+        cst_callbacks.end_loop(epi_m, epi_n);
       }
     }
 
