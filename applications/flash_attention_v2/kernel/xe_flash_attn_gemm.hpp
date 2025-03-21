@@ -234,7 +234,7 @@ public:
                                         : cute::ceil_div(non_causal_seq_len, QK_BLK_N);
 
     auto tiled_prefetch_q = params.mainloop.gmem_tiled_copy_q.template prefetch_selector<Shape<Int<QK_BLK_M>, Int<QK_BLK_K>>, Num_SGs>(params.mainloop.mQ);
-    auto tiled_prefetch_k = params.mainloop.gmem_tiled_copy_k.template prefetch_selector<Shape<Int<QK_BLK_K>, Int<QK_BLK_N>>, Num_SGs>(params.mainloop.mK);
+    auto tiled_prefetch_k = params.mainloop.gmem_tiled_copy_k.template prefetch_selector<Shape<Int<QK_BLK_N>, Int<QK_BLK_K>>, Num_SGs>(params.mainloop.mK);
     auto tiled_prefetch_v = params.mainloop.gmem_tiled_copy_v.template prefetch_selector<Shape<Int<PV_BLK_N>, Int<PV_BLK_K>>, Num_SGs>(params.mainloop.mV);
     auto thr_prefetch_Q = tiled_prefetch_q.get_slice(thread_idx);
     auto thr_prefetch_K = tiled_prefetch_k.get_slice(thread_idx);
