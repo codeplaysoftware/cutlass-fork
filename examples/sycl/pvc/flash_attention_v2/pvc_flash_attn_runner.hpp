@@ -165,12 +165,13 @@ template <class GemmKernel> struct ExampleRunner {
 
       cutlass::DeviceAllocation<ElementOutput> block_S;
       block_S.reset(seq_len_qo * seq_len_kv);
-      int offset_qk = b * seq_len_qo * head_size_qk;
+      int offset_q = b * seq_len_qo * head_size_qk;
+      int offset_k = b * seq_len_kv * head_size_qk;
       int offset_v = b * seq_len_kv * head_size_vo;
       int offset_o = b * seq_len_qo * head_size_vo;
 
-      cutlass::TensorRef ref_Q(block_Q.get() + offset_qk, LayoutQ::packed({seq_len_qo, head_size_qk}));
-      cutlass::TensorRef ref_K(block_K.get() + offset_qk, LayoutK::packed({head_size_qk, seq_len_kv}));
+      cutlass::TensorRef ref_Q(block_Q.get() + offset_q, LayoutQ::packed({seq_len_qo, head_size_qk}));
+      cutlass::TensorRef ref_K(block_K.get() + offset_k, LayoutK::packed({head_size_qk, seq_len_kv}));
       cutlass::TensorRef ref_V(block_V.get() + offset_v, LayoutV::packed({seq_len_kv, head_size_vo}));
       cutlass::TensorRef ref_S(block_S.get(), LayoutQ::packed({seq_len_qo, seq_len_kv}));
       cutlass::TensorRef ref_O(block_ref_O.get() + offset_o, LayoutO::packed({seq_len_qo, head_size_vo}));

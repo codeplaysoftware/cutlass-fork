@@ -100,13 +100,13 @@ struct CollectiveMmaAttention<MainloopIntelPVC<Stages>, TileShape_, ElementQ_, S
   using TileShapeQK = decltype(select<0, 2, 2>(WorkgroupTileShape{}));
   using TileShapePV = decltype(select<2, 1, 2>(WorkgroupTileShape{}));
 
-  static constexpr auto PV_BLK_M = get<0>(TileShapePV{}); // 128
-  static constexpr auto PV_BLK_N = get<1>(TileShapePV{}); // 64
-  static constexpr auto PV_BLK_K = get<2>(TileShapePV{}); // 32
+  static constexpr auto PV_BLK_M = get<0>(TileShapePV{});
+  static constexpr auto PV_BLK_N = get<1>(TileShapePV{});
+  static constexpr auto PV_BLK_K = get<2>(TileShapePV{});
 
-  static constexpr auto PV_ATOM_M = get<1>(typename TiledMmaQVO::ThrLayoutVMNK{}.shape()); // 8
-  static constexpr auto PV_ATOM_N = get<2>(typename TiledMmaQVO::ThrLayoutVMNK{}.shape()); // 1
-  static constexpr auto PV_ATOM_K = get<3>(typename TiledMmaQVO::ThrLayoutVMNK{}.shape()); // 1
+  static constexpr auto PV_ATOM_M = get<1>(typename TiledMmaQVO::ThrLayoutVMNK{}.shape());
+  static constexpr auto PV_ATOM_N = get<2>(typename TiledMmaQVO::ThrLayoutVMNK{}.shape());
+  static constexpr auto PV_ATOM_K = get<3>(typename TiledMmaQVO::ThrLayoutVMNK{}.shape());
 
   using SubgroupTileShapePV = decltype(cute::shape_div(TileShapePV{}, take<1, 4>(typename TiledMmaQVO::ThrLayoutVMNK{}.shape())));
 
@@ -114,9 +114,9 @@ struct CollectiveMmaAttention<MainloopIntelPVC<Stages>, TileShape_, ElementQ_, S
   static constexpr auto PV_SG_N = get<1>(SubgroupTileShapePV{});
   static constexpr auto PV_SG_K = get<2>(SubgroupTileShapePV{});
 
-  static constexpr auto QK_BLK_M = get<0>(TileShapeQK{}); // 128
-  static constexpr auto QK_BLK_N = get<1>(TileShapeQK{}); // 64
-  static constexpr auto QK_BLK_K = get<2>(TileShapeQK{}); // 32
+  static constexpr auto QK_BLK_M = get<0>(TileShapeQK{});
+  static constexpr auto QK_BLK_N = get<1>(TileShapeQK{});
+  static constexpr auto QK_BLK_K = get<2>(TileShapeQK{});
 
   using K_NUM_SG = decltype(typename TiledMmaQVO::ThrLayoutVMNK{}.shape());
   using K_Atom_Shape = decltype(Shape<Int<PV_ATOM_M>, _1, _1>{});
@@ -209,7 +209,7 @@ struct CollectiveMmaAttention<MainloopIntelPVC<Stages>, TileShape_, ElementQ_, S
     auto tensorK = make_tensor(make_gmem_ptr(static_cast<ElementK const *>(args.ptr_K)),
                                make_layout(make_shape(seq_len_kv, head_size_qk, batch * num_heads), args.dK));
     auto tensorV = make_tensor(make_gmem_ptr(static_cast<ElementV const *>(args.ptr_V)),
-                               make_layout(make_shape(head_size_vo, seq_len_qo, batch * num_heads), args.dV));
+                               make_layout(make_shape(head_size_vo, seq_len_kv, batch * num_heads), args.dV));
 
     XE_Copy_Q copyQ = make_tiled_copy(atom_load_Q{}.with(tensorQ),
                                       Layout<CopyThreadShape>{},
