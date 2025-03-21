@@ -187,15 +187,17 @@ struct ExampleRunner {
 
     syclcompat::wait();
 
-    auto D_view = 
-        cutlass::TensorView(
-        block_ref_D.get(), LayoutD::packed({M, N}), cutlass::make_Coord(M, N));
+    for(int batch = 0, offset = 0; batch < L; batch++, offset += M * N) {
+      auto D_view = 
+          cutlass::TensorView(
+          block_ref_D.get() + offset, LayoutD::packed({M, N}), cutlass::make_Coord(M, N));
 
-    auto bias_view =
-        cutlass::TensorView(
-        block_bias.get(), LayoutBias::packed({0, N}), {M, N});
+      auto bias_view =
+          cutlass::TensorView(
+          block_bias.get(), LayoutBias::packed({0, N}), {M, N});
 
-    cutlass::reference::device::TensorPerRowBias(D_view, bias_view);
+      cutlass::reference::device::TensorPerRowBias(D_view, bias_view);
+    }
 
     syclcompat::wait();
 
