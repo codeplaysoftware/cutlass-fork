@@ -81,7 +81,7 @@ public:
   //
 
   static constexpr Params to_underlying_arguments(Arguments const &args) {
-    Element val = args.scale * static_cast<Element>(M_LOG2E);
+    Element val = args.scale * static_cast<Element>(1.4426950408889634074); // log_2(e) = M_LOG2E
     return Params{val};
   }
 

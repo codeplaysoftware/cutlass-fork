@@ -57,7 +57,7 @@
 #endif
 
 // 8bits No transform No transpose
-SYCL_DEVICE_BUILTIN(ushort __builtin_IB_subgroup_block_read_flat_u8_m1k32v1(
+SYCL_DEVICE_BUILTIN(cute::intel::ushort __builtin_IB_subgroup_block_read_flat_u8_m1k32v1(
     long baseoffset, int width_minus_one, int height_minus_one,
     int pitch_minus_one, cute::intel::coord_t coord));
 SYCL_DEVICE_BUILTIN(
@@ -142,7 +142,7 @@ SYCL_DEVICE_BUILTIN(void __builtin_IB_subgroup_block_write_flat_u8_m8k16v2(
 #undef __global
 #define __global __attribute__((opencl_global))
 // 8 bits No transform No transpose
-SYCL_DEVICE_OCL(ushort intel_sub_group_block_read_8b_1r32c(
+SYCL_DEVICE_OCL(cute::intel::ushort intel_sub_group_block_read_8b_1r32c(
     const __global void *base_address, int width, int height, int pitch,
     cute::intel::coord_t coord));
 SYCL_DEVICE_OCL(cute::intel::ushort2 intel_sub_group_block_read_8b_2r32c(
@@ -231,9 +231,9 @@ struct XE_2D_U8x1x32_LD_N {
                                     T *dst) {
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
-    *reinterpret_cast<ushort *>(dst) =
+    *reinterpret_cast<cute::intel::ushort *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m1k32v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -251,7 +251,7 @@ struct XE_2D_U8x2x32_LD_N {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::ushort2 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m2k32v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -268,7 +268,7 @@ struct XE_2D_U8x2x32_ST_N {
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     __builtin_IB_subgroup_block_write_flat_u16_m2k16v1(
-        (long)(baseoffset), width - 1, height - 1, pitch - 1, coord,
+        (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord,
         *(intel::ushort2 *)(src));
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
@@ -287,7 +287,7 @@ struct XE_2D_U8x4x32_LD_N {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::ushort4 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m4k32v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -305,7 +305,7 @@ struct XE_2D_U8x8x32_LD_N {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::ushort8 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m8k32v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -323,7 +323,7 @@ struct XE_2D_U8x16x32_LD_N {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::ushort16 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m16k32v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -335,7 +335,7 @@ struct XE_2D_U8x16x32_LD_N {
                                       intel::coord_t coord) {
 #if defined(SYCL_INTEL_TARGET)
       __builtin_IB_subgroup_block_read_prefetch_u16_m16k16v2(
-          (long)baseoffset, width - 1, height - 1, pitch - 1, coord,
+          (intptr_t)baseoffset, width - 1, height - 1, pitch - 1, coord,
           CacheControl::kL1C_L3C);
 #else
       CUTE_INVALID_CONTROL_PATH(
@@ -356,7 +356,7 @@ struct XE_2D_U8x32x32_LD_N {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::ushort32 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m32k32v1(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -477,7 +477,7 @@ struct XE_2D_U8x1x64_LD_N {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::ushort2 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m1k32v2(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -509,7 +509,7 @@ struct XE_2D_U8x2x64_LD_N {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::ushort4 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m2k32v2(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -541,7 +541,7 @@ struct XE_2D_U8x4x64_LD_N {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::ushort8 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m4k32v2(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -573,7 +573,7 @@ struct XE_2D_U8x8x64_LD_N {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::ushort16 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m8k32v2(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -605,7 +605,7 @@ struct XE_2D_U8x16x64_LD_N {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::ushort32 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m16k32v2(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -617,7 +617,7 @@ struct XE_2D_U8x16x64_LD_N {
                                       intel::coord_t coord) {
 #if defined(SYCL_INTEL_TARGET)
       __builtin_IB_subgroup_block_read_prefetch_u16_m16k16v2(
-          (long)baseoffset, width - 1, height - 1, pitch - 1, coord,
+          (intptr_t)baseoffset, width - 1, height - 1, pitch - 1, coord,
           CacheControl::kL1C_L3C);
 #else
       CUTE_INVALID_CONTROL_PATH(
@@ -638,7 +638,7 @@ struct XE_2D_U8x32x64_LD_N {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::ushort64 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_u8_m32k32v2(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -650,7 +650,7 @@ struct XE_2D_U8x32x64_LD_N {
                                       intel::coord_t coord) {
 #if defined(SYCL_INTEL_TARGET)
       __builtin_IB_subgroup_block_read_prefetch_u16_m32k16v2(
-          (long)baseoffset, width - 1, height - 1, pitch - 1, coord,
+          (intptr_t)baseoffset, width - 1, height - 1, pitch - 1, coord,
           CacheControl::kL1C_L3C);
 #else
       CUTE_INVALID_CONTROL_PATH(
@@ -673,7 +673,7 @@ struct XE_2D_U8x32x16_LD_V {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::uint8 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_transform_u8_k32(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -705,7 +705,7 @@ struct XE_2D_U8x32x32_LD_V {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::uint16 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_transform_u8_k32v2(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -723,7 +723,7 @@ struct XE_2D_U8x32x64_LD_V {
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     *reinterpret_cast<intel::uint32 *>(dst) =
         __builtin_IB_subgroup_block_read_flat_transform_u8_k32v4(
-            (long)(baseoffset), width - 1, height - 1, pitch - 1, coord);
+            (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord);
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
 #endif
@@ -740,7 +740,7 @@ struct XE_2D_U8x1x16_ST_N {
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     __builtin_IB_subgroup_block_write_flat_u8_m1k16v1(
-        (long)(baseoffset), width - 1, height - 1, pitch - 1, coord,
+        (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord,
         *(intel::uchar *)(src));
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
@@ -758,7 +758,7 @@ struct XE_2D_U8x2x16_ST_N {
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     __builtin_IB_subgroup_block_write_flat_u8_m2k16v1(
-        (long)(baseoffset), width - 1, height - 1, pitch - 1, coord,
+        (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord,
         *(intel::uchar2 *)(src));
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
@@ -776,7 +776,7 @@ struct XE_2D_U8x4x16_ST_N {
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     __builtin_IB_subgroup_block_write_flat_u8_m4k16v1(
-        (long)(baseoffset), width - 1, height - 1, pitch - 1, coord,
+        (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord,
         *(intel::uchar4 *)(src));
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
@@ -792,7 +792,7 @@ struct XE_2D_U8x8x16_ST_N {
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     __builtin_IB_subgroup_block_write_flat_u8_m8k16v1(
-        (long)(baseoffset), width - 1, height - 1, pitch - 1, coord,
+        (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord,
         *(intel::uchar8 *)(src));
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
@@ -808,7 +808,7 @@ struct XE_2D_U8x8x32_ST_N {
 #if defined(SYCL_INTEL_TARGET)
     static_assert(sizeof(T) == 1, "Expected T to have size 1");
     __builtin_IB_subgroup_block_write_flat_u8_m8k16v2(
-        (long)(baseoffset), width - 1, height - 1, pitch - 1, coord,
+        (intptr_t)(baseoffset), width - 1, height - 1, pitch - 1, coord,
         *(intel::uchar8 *)(src));
 #else
     CUTE_INVALID_CONTROL_PATH("Trying to use block loads on non-PVC hardware");
